@@ -143,14 +143,20 @@ public:
         int val = 0;
         FunctionDecl *callee = callexpr->getDirectCallee();
         if (callee == mInput) {
+#ifndef ASSIGNMENT_DEBUG
             llvm::errs() << "Please Input an Integer Value : ";
+#endif
             scanf("%d", &val);
 
             mStack.back().bindStmt(callexpr, val);
         } else if (callee == mOutput) {
             Expr *decl = callexpr->getArg(0);
             val = mStack.back().getStmtVal(decl);
+#ifndef ASSIGNMENT_DEBUG
             llvm::errs() << val;
+#else
+            printf("%d\n", val);
+#endif
         } else {
             /// You could add your code here for Function call Return
         }
