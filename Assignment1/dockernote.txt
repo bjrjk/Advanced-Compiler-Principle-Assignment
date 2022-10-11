@@ -1,0 +1,34 @@
+#1.docker获取
+`与改作业用的docker环境一致`
+
+阿里云：docker pull registry.cn-hangzhou.aliyuncs.com/test_tc/llvm_hw:0.2
+	digest: sha256:41414d30fd04220768b641e426c14971d1d78e9252aeb6297118dae1f2d01c50 size: 1574
+
+dockerhub：docker pull lczxxx123/llvm_10_hw:0.2
+	digest: sha256:41414d30fd04220768b641e426c14971d1d78e9252aeb6297118dae1f2d01c50 size: 1574
+
+百度盘：
+链接：https://pan.baidu.com/s/1OhKvsWbsoDj5GyOUs2b5tw 
+提取码：t269 
+复制这段内容后打开百度网盘手机App，操作更方便哦
+
+md5sum llvm_hw.tar
+e79f0230535c7f5ddb77017356212c7a  llvm_hw.tar
+
+
+#2.第一次作业参考命令（主要是第三点-DLLVM_DIR=/usr/local/llvm10ra/）：
+a.创建容器并从容器退出
+docker run -it llvm10_env:0.2 /bin/bash
+exit // exit the docker container
+
+b.拷代码/makefile，testcase
+docker cp ${your code & CMakefile Folder} ${containerId}:/root/
+docker cp ${testcases} ${containerId}:/root/
+
+c.make，注意加上-DLLVM_DIR=/usr/local/llvm10ra/
+docker exec ${containerId} mkdir ${tempBuildFolder}
+docker exec -w ${tempBuildFolder} ${containerId}  cmake -DLLVM_DIR=/usr/local/llvm10ra/ ${your code & CMakefile Folder}
+docker exec -w ${tempBuildFolder} ${containerId} make
+
+d.进入容器，ast-interpreter应该在${tempBuildFolder}底下
+docker exec -it ${containerId} /bin/bash
