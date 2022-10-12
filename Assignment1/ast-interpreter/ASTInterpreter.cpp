@@ -23,6 +23,10 @@ public:
 
     virtual ~InterpreterVisitor() {}
 
+    virtual void VisitIntegerLiteral(IntegerLiteral *intLiteral) {
+        mEnv->integerLiteral(intLiteral);
+    }
+
     virtual void VisitBinaryOperator(BinaryOperator *bop) {
         VisitStmt(bop);
         mEnv->binop(bop);
@@ -45,6 +49,11 @@ public:
 
     virtual void VisitDeclStmt(DeclStmt *declstmt) {
         mEnv->decl(declstmt);
+    }
+
+    virtual void VisitExpr(Expr *expr) {
+        VisitStmt(expr);
+        mEnv->expr(expr);
     }
 
 private:
@@ -84,7 +93,7 @@ public:
 int main(int argc, char **argv) {
     if (argc > 1) {
 #ifdef ASSIGNMENT_DEBUG
-        printf("Warning: ASSIGNMENT_DEBUG_MODE_ON. It's intended for student debug purpose. "
+        fprintf(stderr, "Warning: ASSIGNMENT_DEBUG_MODE_ON. It's intended for student debug purpose. "
                "If you are a teacher evaluating this assignment, please remove the ASSIGNMENT_DEBUG macro "
                "to restore program's original functionality.\n");
         FILE* fp = fopen(argv[1], "r");

@@ -192,6 +192,11 @@ public:
         return mEntry;
     }
 
+    void integerLiteral(IntegerLiteral *intLiteral) {
+        int literalVal = intLiteral->getValue().getSExtValue();
+        mStack.back().bindStmt(intLiteral, literalVal);
+    }
+
     /// !TODO Support comparison operation
     void binop(BinaryOperator *bop) {
         Expr *left = bop->getLHS();
@@ -267,6 +272,10 @@ public:
         } else {
             /// You could add your code here for Function call Return
         }
+    }
+
+    void expr(Expr *expr) {
+
     }
 };
 
