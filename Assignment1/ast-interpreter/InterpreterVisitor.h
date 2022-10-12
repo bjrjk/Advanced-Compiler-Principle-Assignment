@@ -38,6 +38,8 @@ public:
 
     virtual void VisitWhileStmt(WhileStmt *whileStmt);
 
+    virtual void VisitForStmt(ForStmt *forStmt);
+
 private:
     Environment *mEnv;
 };

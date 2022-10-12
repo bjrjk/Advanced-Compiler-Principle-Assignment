@@ -366,6 +366,16 @@ public:
             iVisitor->Visit(whileStmt->getBody());
         }
     }
+
+    void forStmt(ForStmt *forStmt) {
+        iVisitor->Visit(forStmt->getInit());
+        Expr *condExpr = forStmt->getCond();
+        while (true) {
+            iVisitor->Visit(condExpr);
+            int condVal = dStack.back().getStmtVal(condExpr);
+            if (condVal == 0) break;
+            iVisitor->Visit(forStmt->getBody());
+            iVisitor->Visit(forStmt->getInc());
+        }
+    }
 };
-
-

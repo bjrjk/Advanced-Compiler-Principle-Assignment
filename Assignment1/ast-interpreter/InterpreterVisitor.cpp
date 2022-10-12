@@ -46,3 +46,7 @@ void InterpreterVisitor::VisitIfStmt(IfStmt *ifStmt) {
 void InterpreterVisitor::VisitWhileStmt(WhileStmt *whileStmt) {
     mEnv->whileStmt(whileStmt);
 }
+
+void InterpreterVisitor::VisitForStmt(ForStmt *forStmt) {
+    mEnv->forStmt(forStmt);
+}
