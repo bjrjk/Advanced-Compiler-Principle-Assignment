@@ -343,6 +343,23 @@ public:
          int retVal = dStack.back().getStmtVal(retExpr);
          dStack.back().setRetVal(retVal);
     }
+
+    void ifStmt(IfStmt *ifStmt) {
+        Expr *condExpr = ifStmt->getCond();
+        iVisitor->Visit(condExpr);
+        int condVal = dStack.back().getStmtVal(condExpr);
+        if (condVal != 0) {
+            iVisitor->Visit(ifStmt->getThen());
+        } else {
+            if (ifStmt->hasElseStorage()) {
+                iVisitor->Visit(ifStmt->getElse());
+            }
+        }
+    }
+
+    void whileStmt(WhileStmt *whileStmt) {
+
+    }
 };
 
 

@@ -38,3 +38,11 @@ void InterpreterVisitor::VisitReturnStmt(ReturnStmt *retStmt) {
     VisitStmt(retStmt);
     mEnv->ret(retStmt);
 }
+
+void InterpreterVisitor::VisitIfStmt(IfStmt *ifStmt) {
+    mEnv->ifStmt(ifStmt);
+}
+
+void InterpreterVisitor::VisitWhileStmt(WhileStmt *whileStmt) {
+    mEnv->whileStmt(whileStmt);
+}
