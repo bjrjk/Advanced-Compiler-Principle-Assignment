@@ -159,42 +159,43 @@ public:
 
 
 class Environment {
-    std::vector<StackFrame> mStack;
-    Heap heap;
+private:
+    vector<StackFrame> dStack;
+    Heap dHeap;
 
-    FunctionDecl *mFree;                /// Declartions to the built-in functions
-    FunctionDecl *mMalloc;
-    FunctionDecl *mInput;
-    FunctionDecl *mOutput;
+    FunctionDecl *fFree;        // Declarations to the built-in functions
+    FunctionDecl *fMalloc;
+    FunctionDecl *fInput;
+    FunctionDecl *fOutput;
+    FunctionDecl *fEntry;       // Program entrypoint
 
-    FunctionDecl *mEntry;
 public:
-    /// Get the declartions to the built-in functions
-    Environment() : mStack(), mFree(NULL), mMalloc(NULL), mInput(NULL), mOutput(NULL), mEntry(NULL) {
-    }
+    Environment() :fFree(nullptr), fMalloc(nullptr),
+    fInput(nullptr), fOutput(nullptr), fEntry(nullptr) {}
 
 
-    /// Initialize the Environment
+    // Initialize the Environment
     void init(TranslationUnitDecl *unit) {
         for (TranslationUnitDecl::decl_iterator i = unit->decls_begin(), e = unit->decls_end(); i != e; ++i) {
             if (FunctionDecl *fdecl = dyn_cast<FunctionDecl>(*i)) {
-                if (fdecl->getName().equals("FREE")) mFree = fdecl;
-                else if (fdecl->getName().equals("MALLOC")) mMalloc = fdecl;
-                else if (fdecl->getName().equals("GET")) mInput = fdecl;
-                else if (fdecl->getName().equals("PRINT")) mOutput = fdecl;
-                else if (fdecl->getName().equals("main")) mEntry = fdecl;
+                // Get the Declarations to the built-in functions
+                if (fdecl->getName().equals("FREE")) fFree = fdecl;
+                else if (fdecl->getName().equals("MALLOC")) fMalloc = fdecl;
+                else if (fdecl->getName().equals("GET")) fInput = fdecl;
+                else if (fdecl->getName().equals("PRINT")) fOutput = fdecl;
+                else if (fdecl->getName().equals("main")) fEntry = fdecl;
             }
         }
-        mStack.push_back(StackFrame());
+        dStack.push_back(StackFrame());
     }
 
     FunctionDecl *getEntry() {
-        return mEntry;
+        return fEntry;
     }
 
     void integerLiteral(IntegerLiteral *intLiteral) {
         int literalVal = intLiteral->getValue().getSExtValue();
-        mStack.back().bindStmt(intLiteral, literalVal);
+        dStack.back().bindStmt(intLiteral, literalVal);
     }
 
     void binop(BinaryOperator *bop) {
@@ -203,15 +204,15 @@ public:
         auto opStr = bop->getOpcodeStr();
 
         if (opStr.equals("=")) { // Assignment
-            int RHSVal = mStack.back().getStmtVal(RHSExpr);
-            mStack.back().bindStmt(LHSExpr, RHSVal);
+            int RHSVal = dStack.back().getStmtVal(RHSExpr);
+            dStack.back().bindStmt(LHSExpr, RHSVal);
             if (DeclRefExpr *declRefLHSExpr = dyn_cast<DeclRefExpr>(LHSExpr)) {
                 Decl *decl = declRefLHSExpr->getFoundDecl();
-                mStack.back().bindDecl(decl, RHSVal);
+                dStack.back().bindDecl(decl, RHSVal);
             }
         } else { // Arithmatic, Comparative
-            int LHSVal = mStack.back().getStmtVal(LHSExpr);
-            int RHSVal = mStack.back().getStmtVal(RHSExpr);
+            int LHSVal = dStack.back().getStmtVal(LHSExpr);
+            int RHSVal = dStack.back().getStmtVal(RHSExpr);
             int result;
             if (opStr.equals("+")) {
                 result = LHSVal + RHSVal;
@@ -235,7 +236,7 @@ public:
                 assert(false);
                 result = 0;
             }
-            mStack.back().bindStmt(bop, result);
+            dStack.back().bindStmt(bop, result);
         }
     }
 
@@ -244,60 +245,60 @@ public:
              it != ie; ++it) {
             Decl *decl = *it;
             if (VarDecl *vardecl = dyn_cast<VarDecl>(decl)) {
-                mStack.back().bindDecl(vardecl, 0);
+                dStack.back().bindDecl(vardecl, 0);
             }
         }
     }
 
     void declref(DeclRefExpr *declref) { // TODO: Variable only on stack now
-        mStack.back().setPC(declref);
+        dStack.back().setPC(declref);
         if (declref->getType()->isIntegerType()) {
             Decl *decl = declref->getFoundDecl();
 
-            int val = mStack.back().getDeclVal(decl);
-            mStack.back().bindStmt(declref, val);
+            int val = dStack.back().getDeclVal(decl);
+            dStack.back().bindStmt(declref, val);
         }
     }
 
     void cast(CastExpr *castexpr) {
-        mStack.back().setPC(castexpr);
+        dStack.back().setPC(castexpr);
         if (castexpr->getType()->isIntegerType()) {
             Expr *expr = castexpr->getSubExpr();
-            int val = mStack.back().getStmtVal(expr);
-            mStack.back().bindStmt(castexpr, val);
+            int val = dStack.back().getStmtVal(expr);
+            dStack.back().bindStmt(castexpr, val);
         }
     }
 
     /// !TODO Support Function Call
     void call(CallExpr *callexpr) {
-        mStack.back().setPC(callexpr);
+        dStack.back().setPC(callexpr);
         FunctionDecl *callee = callexpr->getDirectCallee();
-        if (callee == mInput) {
+        if (callee == fInput) {
             int val;
 #ifndef ASSIGNMENT_DEBUG
             llvm::errs() << "Please Input an Integer Value : ";
 #endif
             scanf("%d", &val);
-            mStack.back().bindStmt(callexpr, val);
-        } else if (callee == mOutput) {
+            dStack.back().bindStmt(callexpr, val);
+        } else if (callee == fOutput) {
             Expr *outputExp = callexpr->getArg(0);
-            int val = mStack.back().getStmtVal(outputExp);
+            int val = dStack.back().getStmtVal(outputExp);
 #ifndef ASSIGNMENT_DEBUG
             llvm::errs() << val;
 #else
             printf("%d\n", val);
 #endif
-        } else if (callee == mMalloc) {
+        } else if (callee == fMalloc) {
             Expr *chunkSizeExp = callexpr->getArg(0);
-            int chunkSize = mStack.back().getStmtVal(chunkSizeExp);
-            int chunkVMAddr = heap.allocate(chunkSize);
-            mStack.back().bindStmt(callexpr, chunkVMAddr);
-        } else if (callee == mFree) {
+            int chunkSize = dStack.back().getStmtVal(chunkSizeExp);
+            int chunkVMAddr = dHeap.allocate(chunkSize);
+            dStack.back().bindStmt(callexpr, chunkVMAddr);
+        } else if (callee == fFree) {
             Expr *chunkVMAddrExp = callexpr->getArg(0);
-            int chunkVMAddr = mStack.back().getStmtVal(chunkVMAddrExp);
-            heap.release(chunkVMAddr);
-        } else {
-            /// You could add your code here for Function call Return
+            int chunkVMAddr = dStack.back().getStmtVal(chunkVMAddrExp);
+            dHeap.release(chunkVMAddr);
+        } else { // For customized functions, handle call & return here
+
         }
     }
 
