@@ -1,3 +1,4 @@
+#pragma once
 //==--- tools/clang-check/ClangInterpreter.cpp - Clang Interpreter tool --------------===//
 //===----------------------------------------------------------------------===//
 #include <cstdio>
@@ -19,18 +20,21 @@ using namespace std;
 
 using namespace clang;
 
+#include "InterpreterVisitor.h"
+
 typedef unsigned int uint_t;
 
 class StackFrame {
-    /// StackFrame maps Variable Declaration to Value
-    /// Which are either integer or addresses (also represented using an Integer value)
+private:
+    // StackFrame maps Variable Declaration to Value
+    // Which are either integer or addresses (also represented using an Integer value)
     std::map<Decl *, int> mVars;
     std::map<Stmt *, int> mExprs;
-    /// The current stmt
+    // The current stmt
     Stmt *mPC;
+    int mRetVal;
 public:
-    StackFrame() : mVars(), mExprs(), mPC() {
-    }
+    StackFrame() : mVars(), mExprs(), mPC(), mRetVal(0) {}
 
     void bindDecl(Decl *decl, int val) {
         mVars[decl] = val;
@@ -56,6 +60,14 @@ public:
 
     Stmt *getPC() {
         return mPC;
+    }
+
+    void setRetVal(int retVal) {
+        mRetVal = retVal;
+    }
+
+    int getRetVal() const {
+        return mRetVal;
     }
 };
 
@@ -160,6 +172,8 @@ public:
 
 class Environment {
 private:
+    InterpreterVisitor *iVisitor;
+
     vector<StackFrame> dStack;
     Heap dHeap;
 
@@ -175,7 +189,8 @@ public:
 
 
     // Initialize the Environment
-    void init(TranslationUnitDecl *unit) {
+    void init(TranslationUnitDecl *unit, InterpreterVisitor *visitor) {
+        iVisitor = visitor;
         for (TranslationUnitDecl::decl_iterator i = unit->decls_begin(), e = unit->decls_end(); i != e; ++i) {
             if (FunctionDecl *fdecl = dyn_cast<FunctionDecl>(*i)) {
                 // Get the Declarations to the built-in functions
@@ -289,21 +304,44 @@ public:
             printf("%d\n", val);
 #endif
         } else if (callee == fMalloc) {
-            Expr *chunkSizeExp = callexpr->getArg(0);
-            int chunkSize = dStack.back().getStmtVal(chunkSizeExp);
+            Expr *chunkSizeExpr = callexpr->getArg(0);
+            int chunkSize = dStack.back().getStmtVal(chunkSizeExpr);
             int chunkVMAddr = dHeap.allocate(chunkSize);
             dStack.back().bindStmt(callexpr, chunkVMAddr);
         } else if (callee == fFree) {
-            Expr *chunkVMAddrExp = callexpr->getArg(0);
-            int chunkVMAddr = dStack.back().getStmtVal(chunkVMAddrExp);
+            Expr *chunkVMAddrExpr = callexpr->getArg(0);
+            int chunkVMAddr = dStack.back().getStmtVal(chunkVMAddrExpr);
             dHeap.release(chunkVMAddr);
         } else { // For customized functions, handle call & return here
-
+            // Create new call stack
+            dStack.push_back(StackFrame());
+            StackFrame &oldFrame = *(dStack.end() - 2), &newFrame = *(dStack.end() - 1);
+            // Copy argument values to corresponding parameter bindings
+            uint_t paramCount = callee->getNumParams();
+            for (int i = 0; i < paramCount; i++) {
+                Expr *argExpr = callexpr->getArg(i);
+                int argVal = oldFrame.getStmtVal(argExpr);
+                Decl *paramDecl = callee->getParamDecl(i);
+                newFrame.bindDecl(paramDecl, argVal);
+            }
+            // Visit new function
+            iVisitor->VisitStmt(callee->getBody());
+            // Collect return value
+            int retVal = newFrame.getRetVal();
+            oldFrame.bindStmt(callexpr, retVal);
+            // Pop call stack
+            dStack.pop_back();
         }
     }
 
     void expr(Expr *expr) {
 
+    }
+
+    void ret(ReturnStmt *retStmt) {
+         Expr *retExpr = retStmt->getRetValue();
+         int retVal = dStack.back().getStmtVal(retExpr);
+         dStack.back().setRetVal(retVal);
     }
 };
 

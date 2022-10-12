@@ -13,52 +13,9 @@ using namespace std;
 
 using namespace clang;
 
+#include "InterpreterVisitor.h"
 #include "Environment.h"
 
-class InterpreterVisitor :
-        public EvaluatedExprVisitor<InterpreterVisitor> {
-public:
-    explicit InterpreterVisitor(const ASTContext &context, Environment *env)
-            : EvaluatedExprVisitor(context), mEnv(env) {}
-
-    virtual ~InterpreterVisitor() {}
-
-    virtual void VisitIntegerLiteral(IntegerLiteral *intLiteral) {
-        mEnv->integerLiteral(intLiteral);
-    }
-
-    virtual void VisitBinaryOperator(BinaryOperator *bop) {
-        VisitStmt(bop);
-        mEnv->binop(bop);
-    }
-
-    virtual void VisitDeclRefExpr(DeclRefExpr *expr) {
-        VisitStmt(expr);
-        mEnv->declref(expr);
-    }
-
-    virtual void VisitCastExpr(CastExpr *expr) {
-        VisitStmt(expr);
-        mEnv->cast(expr);
-    }
-
-    virtual void VisitCallExpr(CallExpr *call) {
-        VisitStmt(call);
-        mEnv->call(call);
-    }
-
-    virtual void VisitDeclStmt(DeclStmt *declstmt) {
-        mEnv->decl(declstmt);
-    }
-
-    virtual void VisitExpr(Expr *expr) {
-        VisitStmt(expr);
-        mEnv->expr(expr);
-    }
-
-private:
-    Environment *mEnv;
-};
 
 class InterpreterConsumer : public ASTConsumer {
 public:
@@ -70,7 +27,7 @@ public:
 
     virtual void HandleTranslationUnit(clang::ASTContext &Context) {
         TranslationUnitDecl *decl = Context.getTranslationUnitDecl();
-        mEnv.init(decl);
+        mEnv.init(decl, &mVisitor);
 
         FunctionDecl *entry = mEnv.getEntry();
         mVisitor.VisitStmt(entry->getBody());

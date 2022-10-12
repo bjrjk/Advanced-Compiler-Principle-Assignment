@@ -6,7 +6,7 @@ find_package(Clang REQUIRED CONFIG HINTS ${LLVM_DIR} ${LLVM_DIR}/lib/cmake/clang
 include_directories(${LLVM_INCLUDE_DIRS} ${CLANG_INCLUDE_DIRS} SYSTEM)
 link_directories(${LLVM_LIBRARY_DIRS})
 
-file(GLOB SOURCE "./*.cpp")
+file(GLOB SOURCE "*.cpp")
 
 add_executable(ast-interpreter ${SOURCE})
 
