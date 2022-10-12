@@ -197,18 +197,45 @@ public:
         mStack.back().bindStmt(intLiteral, literalVal);
     }
 
-    /// !TODO Support comparison operation
     void binop(BinaryOperator *bop) {
-        Expr *left = bop->getLHS();
-        Expr *right = bop->getRHS();
+        Expr *LHSExpr = bop->getLHS();
+        Expr *RHSExpr = bop->getRHS();
+        auto opStr = bop->getOpcodeStr();
 
-        if (bop->isAssignmentOp()) {
-            int val = mStack.back().getStmtVal(right);
-            mStack.back().bindStmt(left, val);
-            if (DeclRefExpr *declexpr = dyn_cast<DeclRefExpr>(left)) {
-                Decl *decl = declexpr->getFoundDecl();
-                mStack.back().bindDecl(decl, val);
+        if (opStr.equals("=")) { // Assignment
+            int RHSVal = mStack.back().getStmtVal(RHSExpr);
+            mStack.back().bindStmt(LHSExpr, RHSVal);
+            if (DeclRefExpr *declRefLHSExpr = dyn_cast<DeclRefExpr>(LHSExpr)) {
+                Decl *decl = declRefLHSExpr->getFoundDecl();
+                mStack.back().bindDecl(decl, RHSVal);
             }
+        } else { // Arithmatic, Comparative
+            int LHSVal = mStack.back().getStmtVal(LHSExpr);
+            int RHSVal = mStack.back().getStmtVal(RHSExpr);
+            int result;
+            if (opStr.equals("+")) {
+                result = LHSVal + RHSVal;
+            } else if (opStr.equals("-")) {
+                result = LHSVal - RHSVal;
+            } else if (opStr.equals("*")) {
+                result = LHSVal * RHSVal;
+            } else if (opStr.equals("/")) {
+                result = LHSVal / RHSVal;
+            } else if (opStr.equals("<")) {
+                result = LHSVal < RHSVal;
+            } else if (opStr.equals("<=")) {
+                result = LHSVal <= RHSVal;
+            } else if (opStr.equals(">")) {
+                result = LHSVal > RHSVal;
+            } else if (opStr.equals(">=")) {
+                result = LHSVal >= RHSVal;
+            } else if (opStr.equals("==")) {
+                result = LHSVal == RHSVal;
+            } else {
+                assert(false);
+                result = 0;
+            }
+            mStack.back().bindStmt(bop, result);
         }
     }
 
@@ -222,7 +249,7 @@ public:
         }
     }
 
-    void declref(DeclRefExpr *declref) {
+    void declref(DeclRefExpr *declref) { // TODO: Variable only on stack now
         mStack.back().setPC(declref);
         if (declref->getType()->isIntegerType()) {
             Decl *decl = declref->getFoundDecl();
