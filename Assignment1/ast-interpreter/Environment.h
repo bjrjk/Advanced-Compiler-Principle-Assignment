@@ -358,7 +358,13 @@ public:
     }
 
     void whileStmt(WhileStmt *whileStmt) {
-
+        Expr *condExpr = whileStmt->getCond();
+        while (true) {
+            iVisitor->Visit(condExpr);
+            int condVal = dStack.back().getStmtVal(condExpr);
+            if (condVal == 0) break;
+            iVisitor->Visit(whileStmt->getBody());
+        }
     }
 };
 
