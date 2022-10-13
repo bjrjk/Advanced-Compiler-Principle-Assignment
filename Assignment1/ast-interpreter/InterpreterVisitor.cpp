@@ -10,6 +10,11 @@ void InterpreterVisitor::VisitBinaryOperator(BinaryOperator *bop) {
     mEnv->binop(bop);
 }
 
+void InterpreterVisitor::VisitUnaryOperator(UnaryOperator *uop) {
+    VisitStmt(uop);
+    mEnv->uop(uop);
+}
+
 void InterpreterVisitor::VisitDeclRefExpr(DeclRefExpr *expr) {
     VisitStmt(expr);
     mEnv->declref(expr);

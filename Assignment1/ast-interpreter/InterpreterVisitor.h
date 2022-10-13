@@ -22,6 +22,8 @@ public:
 
     virtual void VisitBinaryOperator(BinaryOperator *bop);
 
+    virtual void VisitUnaryOperator(UnaryOperator *uop);
+
     virtual void VisitDeclRefExpr(DeclRefExpr *expr);
 
     virtual void VisitCastExpr(CastExpr *expr);

@@ -319,6 +319,21 @@ public:
         }
     }
 
+    void uop(UnaryOperator *uop) {
+        Expr *subExpr = uop->getSubExpr();
+        int subVal = dStack.back().getStmtVal(subExpr);
+        auto opStr = uop->getOpcodeStr(uop->getOpcode());
+
+        int result;
+        if (opStr.equals("-")) {
+            result = -subVal;
+        } else {
+            assert(false);
+            result = 0;
+        }
+        dStack.back().bindStmt(uop, result);
+    }
+
     void decl(DeclStmt *declstmt) {
         for (DeclStmt::decl_iterator it = declstmt->decl_begin(), ie = declstmt->decl_end();
              it != ie; ++it) {
