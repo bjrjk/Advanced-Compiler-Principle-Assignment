@@ -16,7 +16,8 @@ void InterpreterVisitor::VisitUnaryOperator(UnaryOperator *uop) {
 }
 
 void InterpreterVisitor::VisitArraySubscriptExpr(ArraySubscriptExpr *arrSubExpr) {
-
+    VisitStmt(arrSubExpr);
+    mEnv->arraySubscriptExpr(arrSubExpr);
 }
 
 void InterpreterVisitor::VisitDeclRefExpr(DeclRefExpr *expr) {

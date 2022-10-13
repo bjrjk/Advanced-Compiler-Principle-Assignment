@@ -3,6 +3,7 @@
 
 #include <cstdio>
 #include <unistd.h>
+
 using namespace std;
 
 #include "clang/AST/ASTConsumer.h"
@@ -40,7 +41,7 @@ private:
 
 class InterpreterClassAction : public ASTFrontendAction {
 public:
-    virtual std::unique_ptr <clang::ASTConsumer> CreateASTConsumer(
+    virtual std::unique_ptr<clang::ASTConsumer> CreateASTConsumer(
             clang::CompilerInstance &Compiler, llvm::StringRef InFile) {
         return std::unique_ptr<clang::ASTConsumer>(
                 new InterpreterConsumer(Compiler.getASTContext()));
@@ -49,18 +50,21 @@ public:
 
 int main(int argc, char **argv) {
     if (argc > 1) {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+        fprintf(stderr, "Warning: ASSIGNMENT DEBUG DUMP ON. \n");
+#endif
 #ifdef ASSIGNMENT_DEBUG
-        fprintf(stderr, "Warning: ASSIGNMENT_DEBUG_MODE_ON. It's intended for student debug purpose. "
-               "If you are a teacher evaluating this assignment, please remove the ASSIGNMENT_DEBUG macro "
-               "to restore program's original functionality.\n");
-        FILE* fp = fopen(argv[1], "r");
+        fprintf(stderr, "Warning: ASSIGNMENT DEBUG MODE ON. It's intended for student debug purpose. "
+                        "If you are a TA evaluating this assignment, please remove the ASSIGNMENT_DEBUG macro "
+                        "to restore program's original functionality.\n");
+        FILE *fp = fopen(argv[1], "r");
         if (fp == NULL) {
             perror("Unable to open source");
             return 1;
         }
         fseek(fp, 0, SEEK_END);
         long fileSize = ftell(fp);
-        char* source = static_cast<char *>(calloc(fileSize + 1, sizeof(char)));
+        char *source = static_cast<char *>(calloc(fileSize + 1, sizeof(char)));
         fseek(fp, 0, SEEK_SET);
         fread(source, sizeof(char), fileSize, fp);
         fclose(fp);

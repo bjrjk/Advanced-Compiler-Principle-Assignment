@@ -42,62 +42,6 @@ public:
     }
 };
 
-class StackFrame {
-private:
-    // StackFrame maps Variable Declaration to Value
-    // Which are either integer or addresses (also represented using an Integer value)
-    std::map<Decl *, int> mVars;
-    std::map<Stmt *, int> mExprs;
-    // The current stmt
-    Stmt *mPC;
-    int mRetVal;
-    bool mHasRetVal;
-public:
-    StackFrame() : mVars(), mExprs(), mPC(), mRetVal(0), mHasRetVal(false) {}
-
-    void bindDecl(Decl *decl, int val) {
-        mVars[decl] = val;
-    }
-
-    int getDeclVal(Decl *decl) {
-        assert(mVars.find(decl) != mVars.end());
-        return mVars.find(decl)->second;
-    }
-
-    bool hasDeclVal(Decl *decl) const {
-        return mVars.count(decl);
-    }
-
-    void bindStmt(Stmt *stmt, int val) {
-        mExprs[stmt] = val;
-    }
-
-    int getStmtVal(Stmt *stmt) {
-        assert(mExprs.find(stmt) != mExprs.end());
-        return mExprs[stmt];
-    }
-
-    void setPC(Stmt *stmt) {
-        mPC = stmt;
-    }
-
-    Stmt *getPC() {
-        return mPC;
-    }
-
-    void setRetVal(int retVal) {
-        mRetVal = retVal;
-        mHasRetVal = true;
-    }
-
-    int getRetVal() const {
-        return mRetVal;
-    }
-
-    bool hasRetVal() const {
-        return mHasRetVal;
-    }
-};
 
 // Heap maps address to a value
 class Heap {
@@ -155,7 +99,12 @@ private:
     }
 
 public:
-    Heap() : addressAccumulator(0) {}
+    static Heap *allocator;
+
+    Heap() : addressAccumulator(0) {
+        assert(allocator == nullptr);
+        allocator = this;
+    }
 
     ~Heap() {
         for_each(chunks.begin(), chunks.end(), [](chunkMeta *&chunk) {
@@ -163,6 +112,7 @@ public:
             chunk = nullptr;
         });
         chunks.clear();
+        allocator = nullptr;
     }
 
     int allocate(int size) {
@@ -199,12 +149,81 @@ public:
 };
 
 
+class StackFrame {
+private:
+    // StackFrame maps Variable Declaration to Value
+    // Which are either integer or addresses (also represented using an Integer value)
+    std::map<Decl *, int> mVars;
+    std::map<Stmt *, int> mExprs;
+    // The current stmt
+    Stmt *mPC;
+    int mRetVal;
+    bool mHasRetVal;
+public:
+    StackFrame() : mVars(), mExprs(), mPC(), mRetVal(0), mHasRetVal(false) {}
+
+    ~StackFrame() {
+        for_each(mVars.begin(), mVars.end(), [&](pair<Decl *const, int> item) {
+            if (VarDecl *varDecl = dyn_cast<VarDecl>(item.first)) {
+                // For auto array, do heap release automatically
+                if (varDecl->getType()->isConstantArrayType()) {
+                    int heapAddr = item.second;
+                    Heap::allocator->release(heapAddr);
+                }
+            }
+        });
+    }
+
+    void bindDecl(Decl *decl, int val) {
+        mVars[decl] = val;
+    }
+
+    int getDeclVal(Decl *decl) {
+        assert(mVars.find(decl) != mVars.end());
+        return mVars.find(decl)->second;
+    }
+
+    bool hasDeclVal(Decl *decl) const {
+        return mVars.count(decl);
+    }
+
+    void bindStmt(Stmt *stmt, int val) {
+        mExprs[stmt] = val;
+    }
+
+    int getStmtVal(Stmt *stmt) {
+        assert(mExprs.find(stmt) != mExprs.end());
+        return mExprs[stmt];
+    }
+
+    void setPC(Stmt *stmt) {
+        mPC = stmt;
+    }
+
+    Stmt *getPC() {
+        return mPC;
+    }
+
+    void setRetVal(int retVal) {
+        mRetVal = retVal;
+        mHasRetVal = true;
+    }
+
+    int getRetVal() const {
+        return mRetVal;
+    }
+
+    bool hasRetVal() const {
+        return mHasRetVal;
+    }
+};
+
 class Environment {
 private:
     InterpreterVisitor *iVisitor;
 
-    vector<StackFrame> dStack;
     Heap dHeap;
+    vector<StackFrame> dStack;
     StaticStorage dStaticData;
 
     FunctionDecl *fFree;        // Declarations to the built-in functions
@@ -290,11 +309,14 @@ public:
 
         if (opStr.equals("=")) { // Assignment
             int RHSVal = dStack.back().getStmtVal(RHSExpr);
-            dStack.back().bindStmt(LHSExpr, RHSVal);
             if (DeclRefExpr *declRefLHSExpr = dyn_cast<DeclRefExpr>(LHSExpr)) {
                 Decl *decl = declRefLHSExpr->getFoundDecl();
                 bindDecl(decl, RHSVal); // LHSValue of Assignment maybe global or local variable
+            } else if (ArraySubscriptExpr *arrSubExpr = dyn_cast<ArraySubscriptExpr>(LHSExpr)) {
+                int LHSAddr = dStack.back().getStmtVal(LHSExpr);
+                Heap::allocator->set(LHSAddr, RHSVal);
             }
+            dStack.back().bindStmt(bop, RHSVal);
         } else { // Arithmatic, Comparative
             int LHSVal = dStack.back().getStmtVal(LHSExpr);
             int RHSVal = dStack.back().getStmtVal(RHSExpr);
@@ -341,7 +363,18 @@ public:
     }
 
     void arraySubscriptExpr(ArraySubscriptExpr *arrSubExpr) {
-
+        Expr *baseExpr = arrSubExpr->getBase(), *idxExpr = arrSubExpr->getIdx();
+        int baseHeapAddr = dStack.back().getStmtVal(baseExpr);
+        int elementOffset = dStack.back().getStmtVal(idxExpr);
+        int targetAddr = -1;
+        if (baseExpr->getType()->isPointerType()) {
+            auto pointeeType = baseExpr->getType()->getPointeeOrArrayElementType();
+            if (pointeeType->isIntegerType()) {
+                targetAddr = baseHeapAddr + elementOffset * sizeof(int);
+            }
+        }
+        assert(targetAddr != -1);
+        dStack.back().bindStmt(arrSubExpr, targetAddr);
     }
 
     void declStmt(DeclStmt *declstmt) {
@@ -350,24 +383,40 @@ public:
             Decl *decl = *it;
             if (VarDecl *vardecl = dyn_cast<VarDecl>(decl)) {
                 int initVal = 0;
-                if (vardecl->hasInit()) {
-                    Expr *initExpr = vardecl->getInit();
-                    iVisitor->Visit(initExpr);
-                    initVal = dStack.back().getStmtVal(initExpr);
+                if (vardecl->getType()->isIntegerType()) {
+                    if (vardecl->hasInit()) {
+                        Expr *initExpr = vardecl->getInit();
+                        iVisitor->Visit(initExpr);
+                        initVal = dStack.back().getStmtVal(initExpr);
+                    }
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                    fprintf(stderr, "Local int variable %s=%d on %p.\n",
+                            vardecl->getDeclName().getAsString().c_str(), initVal, vardecl);
+#endif
+                } else if (vardecl->getType()->isConstantArrayType()) {
+                    const ConstantArrayType *constArrType = dyn_cast<ConstantArrayType>(vardecl->getType());
+                    unsigned int arrLength = constArrType->getSize().getZExtValue();
+                    int heapAddr = Heap::allocator->allocate(arrLength * sizeof(int));
+                    initVal = heapAddr;
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                    fprintf(stderr, "Local array %s[%u] at VMHeapAddr 0x%x, size %lu, on %p.\n",
+                            vardecl->getDeclName().getAsString().c_str(), arrLength,
+                            heapAddr, arrLength * sizeof(int), vardecl);
+#endif
                 }
                 dStack.back().bindDecl(vardecl, initVal); // Local variables are on the stack frame
-#ifdef ASSIGNMENT_DEBUG_DUMP
-                fprintf(stderr, "Local variable %s=%d on %p.\n",
-                        vardecl->getDeclName().getAsString().c_str(), initVal, vardecl);
-#endif
             }
+
         }
     }
 
     void declRefExpr(DeclRefExpr *declRefExpr) {
         // Variable maybe global or on the stack frame
         dStack.back().setPC(declRefExpr);
-        if (declRefExpr->getType()->isIntegerType()) {
+        auto declRefExprType = declRefExpr->getType();
+        if (declRefExprType->isIntegerType() ||
+            declRefExprType->isPointerType() && !declRefExprType->isFunctionPointerType() ||
+            declRefExprType->isArrayType()) {
             Decl *decl = declRefExpr->getFoundDecl();
             int val = getDeclVal(decl);
             dStack.back().bindStmt(declRefExpr, val);
@@ -376,9 +425,17 @@ public:
 
     void castExpr(CastExpr *castExpr) {
         dStack.back().setPC(castExpr);
-        if (castExpr->getType()->isIntegerType()) {
-            Expr *expr = castExpr->getSubExpr();
-            int val = dStack.back().getStmtVal(expr);
+        auto castExprType = castExpr->getType();
+        if (castExprType->isIntegerType() ||
+            castExprType->isPointerType() && !castExprType->isFunctionPointerType() ||
+            castExprType->isArrayType()) {
+            Expr *subExpr = castExpr->getSubExpr();
+            int val = dStack.back().getStmtVal(subExpr);
+            if (ArraySubscriptExpr *arrSubExpr = llvm::dyn_cast<ArraySubscriptExpr>(subExpr)) {
+                if (castExpr->getCastKind() == clang::CK_LValueToRValue) {
+                    val = Heap::allocator->get(val);
+                }
+            }
             dStack.back().bindStmt(castExpr, val);
         }
     }
@@ -472,8 +529,12 @@ public:
     }
 
     void forStmt(ForStmt *forStmt) {
-        iVisitor->Visit(forStmt->getInit());
+        Stmt *initExpr = forStmt->getInit();
         Expr *condExpr = forStmt->getCond();
+        if (initExpr) {
+            iVisitor->Visit(forStmt->getInit());
+        }
+
         while (true) {
             iVisitor->Visit(condExpr);
             int condVal = dStack.back().getStmtVal(condExpr);
@@ -484,7 +545,7 @@ public:
     }
 
     void stmt(Stmt *stmt) {
-        for (auto *SubStmt : stmt->children()) {
+        for (auto *SubStmt: stmt->children()) {
             if (dStack.back().hasRetVal()) break; // Stop from executing current function after return statement
             if (SubStmt) {
                 iVisitor->Visit(SubStmt);
