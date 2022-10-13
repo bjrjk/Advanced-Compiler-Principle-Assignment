@@ -123,14 +123,14 @@ public:
 
     void release(int addr) {
         // Remove only when `addr` is chunk's begin address
-        remove_if(chunks.begin(), chunks.end(), [&](chunkMeta *&chunk) {
+        chunks.erase(remove_if(chunks.begin(), chunks.end(), [&](chunkMeta *&chunk) {
             if (chunk->getBegin() == addr) {
                 delete chunk;
                 chunk = nullptr;
                 return true;
             }
             return false;
-        });
+        }));
     }
 
     void set(int addr, int val) {
@@ -315,14 +315,30 @@ public:
             } else if (ArraySubscriptExpr *arrSubExpr = dyn_cast<ArraySubscriptExpr>(LHSExpr)) {
                 int LHSAddr = dStack.back().getStmtVal(LHSExpr);
                 Heap::allocator->set(LHSAddr, RHSVal);
+            } else if (UnaryOperator * uop = dyn_cast<UnaryOperator>(LHSExpr)) {
+                if (uop->getOpcodeStr(uop->getOpcode()).equals("*")) { // dereference
+                    int LHSAddr = dStack.back().getStmtVal(LHSExpr);
+                    Heap::allocator->set(LHSAddr, RHSVal);
+                }
             }
             dStack.back().bindStmt(bop, RHSVal);
-        } else { // Arithmatic, Comparative
+        } else { // Integer Arithmatic, Integer Comparative, Pointer Arithmatic
             int LHSVal = dStack.back().getStmtVal(LHSExpr);
             int RHSVal = dStack.back().getStmtVal(RHSExpr);
             int result;
             if (opStr.equals("+")) {
-                result = LHSVal + RHSVal;
+                if (bop->getType()->isIntegerType()) {
+                    result = LHSVal + RHSVal;
+                } else if (bop->getType()->isPointerType()) {
+                    // TODO: Now consider all pointers as int *
+                    if (LHSExpr->getType()->isPointerType() && RHSExpr->getType()->isIntegerType()) {
+                        result = LHSVal + sizeof(int) * RHSVal;
+                    } else if (LHSExpr->getType()->isIntegerType() && RHSExpr->getType()->isPointerType()) {
+                        result = RHSVal + sizeof(int) * LHSVal;
+                    } else {
+                        assert(false);
+                    }
+                }
             } else if (opStr.equals("-")) {
                 result = LHSVal - RHSVal;
             } else if (opStr.equals("*")) {
@@ -355,11 +371,22 @@ public:
         int result;
         if (opStr.equals("-")) {
             result = -subVal;
+        } else if (opStr.equals("*")) {
+            result = subVal; // Still store address here
         } else {
             assert(false);
             result = 0;
         }
         dStack.back().bindStmt(uop, result);
+    }
+
+    void unaryExprOrTypeTraitExpr(UnaryExprOrTypeTraitExpr *UoTTexpr) {
+        if (UoTTexpr->getKind() == clang::UETT_SizeOf) {
+            if (UoTTexpr->getArgumentType()->isIntegerType() ||
+                UoTTexpr->getArgumentType()->isPointerType()) {
+                dStack.back().bindStmt(UoTTexpr, sizeof(int));
+            }
+        }
     }
 
     void arraySubscriptExpr(ArraySubscriptExpr *arrSubExpr) {
@@ -369,7 +396,7 @@ public:
         int targetAddr = -1;
         if (baseExpr->getType()->isPointerType()) {
             auto pointeeType = baseExpr->getType()->getPointeeOrArrayElementType();
-            if (pointeeType->isIntegerType()) {
+            if (pointeeType->isIntegerType() || pointeeType->isPointerType()) {
                 targetAddr = baseHeapAddr + elementOffset * sizeof(int);
             }
         }
@@ -403,6 +430,11 @@ public:
                             vardecl->getDeclName().getAsString().c_str(), arrLength,
                             heapAddr, arrLength * sizeof(int), vardecl);
 #endif
+                } else if (vardecl->getType()->isPointerType()) {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                    fprintf(stderr, "Local pointer %s on %p.\n",
+                            vardecl->getDeclName().getAsString().c_str(), vardecl);
+#endif
                 }
                 dStack.back().bindDecl(vardecl, initVal); // Local variables are on the stack frame
             }
@@ -431,9 +463,13 @@ public:
             castExprType->isArrayType()) {
             Expr *subExpr = castExpr->getSubExpr();
             int val = dStack.back().getStmtVal(subExpr);
-            if (ArraySubscriptExpr *arrSubExpr = llvm::dyn_cast<ArraySubscriptExpr>(subExpr)) {
-                if (castExpr->getCastKind() == clang::CK_LValueToRValue) {
+            if (castExpr->getCastKind() == clang::CK_LValueToRValue) {
+                if (ArraySubscriptExpr *arrSubExpr = dyn_cast<ArraySubscriptExpr>(subExpr)) {
                     val = Heap::allocator->get(val);
+                } else if (UnaryOperator * uop = dyn_cast<UnaryOperator>(subExpr)) {
+                    if (uop->getOpcodeStr(uop->getOpcode()).equals("*")) { // dereference
+                        val = Heap::allocator->get(val);
+                    }
                 }
             }
             dStack.back().bindStmt(castExpr, val);
@@ -493,6 +529,12 @@ public:
             // Pop call stack
             dStack.pop_back();
         }
+    }
+
+    void parenExpr(ParenExpr *parenExpr) {
+        Expr * subExpr = parenExpr->getSubExpr();
+        int val = dStack.back().getStmtVal(subExpr);
+        dStack.back().bindStmt(parenExpr, val);
     }
 
     void expr(Expr *expr) {
