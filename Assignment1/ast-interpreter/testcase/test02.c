@@ -14,6 +14,3 @@ int main() {
    int a=2;
    PRINT(f(b,a));
 }
-
-
-#20

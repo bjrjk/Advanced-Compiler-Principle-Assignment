@@ -24,6 +24,24 @@ using namespace clang;
 
 typedef unsigned int uint_t;
 
+class StaticStorage {
+private:
+    map<Decl *, int> globData;
+public:
+    void set(Decl *varDecl, int val) {
+        globData[varDecl] = val;
+    }
+
+    int get(Decl *varDecl) {
+        assert(globData.count(varDecl) != 0);
+        return globData[varDecl];
+    }
+
+    bool has(Decl *varDecl) const {
+        return globData.count(varDecl);
+    }
+};
+
 class StackFrame {
 private:
     // StackFrame maps Variable Declaration to Value
@@ -43,6 +61,10 @@ public:
     int getDeclVal(Decl *decl) {
         assert(mVars.find(decl) != mVars.end());
         return mVars.find(decl)->second;
+    }
+
+    bool hasDeclVal(Decl *decl) const {
+        return mVars.count(decl);
     }
 
     void bindStmt(Stmt *stmt, int val) {
@@ -71,8 +93,7 @@ public:
     }
 };
 
-/// Heap maps address to a value
-
+// Heap maps address to a value
 class Heap {
 private:
     struct chunkMeta {
@@ -113,7 +134,7 @@ private:
     unsigned int addressAccumulator;
     vector<chunkMeta *> chunks;
 
-    chunkMeta* queryChunkMeta(int addr) const {
+    chunkMeta *queryChunkMeta(int addr) const {
         auto findIter = find_if(chunks.begin(), chunks.end(), [&](chunkMeta *chunk) {
             uint_t begin = chunk->getBegin(), length = chunk->getLength();
             uint_t end = begin + length;
@@ -126,8 +147,10 @@ private:
             return nullptr;
         }
     }
+
 public:
     Heap() : addressAccumulator(0) {}
+
     ~Heap() {
         for_each(chunks.begin(), chunks.end(), [](chunkMeta *&chunk) {
             delete chunk;
@@ -176,6 +199,7 @@ private:
 
     vector<StackFrame> dStack;
     Heap dHeap;
+    StaticStorage dStaticData;
 
     FunctionDecl *fFree;        // Declarations to the built-in functions
     FunctionDecl *fMalloc;
@@ -184,24 +208,64 @@ private:
     FunctionDecl *fEntry;       // Program entrypoint
 
 public:
-    Environment() :fFree(nullptr), fMalloc(nullptr),
-    fInput(nullptr), fOutput(nullptr), fEntry(nullptr) {}
+    Environment() : fFree(nullptr), fMalloc(nullptr),
+                    fInput(nullptr), fOutput(nullptr), fEntry(nullptr) {}
 
 
     // Initialize the Environment
     void init(TranslationUnitDecl *unit, InterpreterVisitor *visitor) {
         iVisitor = visitor;
+        // Create initialization stack frame
+        dStack.emplace_back();
+        // Do initialization
         for (TranslationUnitDecl::decl_iterator i = unit->decls_begin(), e = unit->decls_end(); i != e; ++i) {
-            if (FunctionDecl *fdecl = dyn_cast<FunctionDecl>(*i)) {
-                // Get the Declarations to the built-in functions
-                if (fdecl->getName().equals("FREE")) fFree = fdecl;
-                else if (fdecl->getName().equals("MALLOC")) fMalloc = fdecl;
-                else if (fdecl->getName().equals("GET")) fInput = fdecl;
-                else if (fdecl->getName().equals("PRINT")) fOutput = fdecl;
-                else if (fdecl->getName().equals("main")) fEntry = fdecl;
+            if (FunctionDecl *fDecl = dyn_cast<FunctionDecl>(*i)) {
+                // Collect the Declarations to the built-in function pointers
+                if (fDecl->getName().equals("FREE")) fFree = fDecl;
+                else if (fDecl->getName().equals("MALLOC")) fMalloc = fDecl;
+                else if (fDecl->getName().equals("GET")) fInput = fDecl;
+                else if (fDecl->getName().equals("PRINT")) fOutput = fDecl;
+                else if (fDecl->getName().equals("main")) fEntry = fDecl;
+            } else if (VarDecl *vDecl = dyn_cast<VarDecl>(*i)) {
+                // Collect global variables and their init values
+                int initVal = 0;
+                if (vDecl->hasInit()) {
+                    Expr *initExpr = vDecl->getInit();
+                    iVisitor->Visit(initExpr);
+                    initVal = dStack.back().getStmtVal(initExpr);
+                }
+                dStaticData.set(vDecl, initVal);
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                fprintf(stderr, "Global variable %s=%d on %p.\n",
+                        vDecl->getDeclName().getAsString().c_str(), initVal, vDecl);
+#endif
             }
         }
-        dStack.push_back(StackFrame());
+        // Pop the initialization stack frame
+        dStack.pop_back();
+        // Create stack frame for main
+        dStack.emplace_back();
+    }
+
+    void bindDecl(Decl *decl, int val) {
+        if (dStack.back().hasDeclVal(decl)) {
+            dStack.back().bindDecl(decl, val);
+        } else if (dStaticData.has(decl)) {
+            dStaticData.set(decl, val);
+        } else {
+            assert(false);
+        }
+    }
+
+    int getDeclVal(Decl *decl) {
+        if (dStack.back().hasDeclVal(decl)) {
+            return dStack.back().getDeclVal(decl);
+        } else if (dStaticData.has(decl)) {
+            return dStaticData.get(decl);
+        } else {
+            assert(false);
+            return 0;
+        }
     }
 
     FunctionDecl *getEntry() {
@@ -223,7 +287,7 @@ public:
             dStack.back().bindStmt(LHSExpr, RHSVal);
             if (DeclRefExpr *declRefLHSExpr = dyn_cast<DeclRefExpr>(LHSExpr)) {
                 Decl *decl = declRefLHSExpr->getFoundDecl();
-                dStack.back().bindDecl(decl, RHSVal);
+                bindDecl(decl, RHSVal); // LHSValue of Assignment maybe global or local variable
             }
         } else { // Arithmatic, Comparative
             int LHSVal = dStack.back().getStmtVal(LHSExpr);
@@ -260,17 +324,27 @@ public:
              it != ie; ++it) {
             Decl *decl = *it;
             if (VarDecl *vardecl = dyn_cast<VarDecl>(decl)) {
-                dStack.back().bindDecl(vardecl, 0);
+                int initVal = 0;
+                if (vardecl->hasInit()) {
+                    Expr *initExpr = vardecl->getInit();
+                    iVisitor->Visit(initExpr);
+                    initVal = dStack.back().getStmtVal(initExpr);
+                }
+                dStack.back().bindDecl(vardecl, initVal); // Local variables are on the stack frame
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                fprintf(stderr, "Local variable %s=%d on %p.\n",
+                        vardecl->getDeclName().getAsString().c_str(), initVal, vardecl);
+#endif
             }
         }
     }
 
-    void declref(DeclRefExpr *declref) { // TODO: Variable only on stack now
+    void declref(DeclRefExpr *declref) {
+        // Variable maybe global or on the stack frame
         dStack.back().setPC(declref);
         if (declref->getType()->isIntegerType()) {
             Decl *decl = declref->getFoundDecl();
-
-            int val = dStack.back().getDeclVal(decl);
+            int val = getDeclVal(decl);
             dStack.back().bindStmt(declref, val);
         }
     }
@@ -288,6 +362,9 @@ public:
     void call(CallExpr *callexpr) {
         dStack.back().setPC(callexpr);
         FunctionDecl *callee = callexpr->getDirectCallee();
+#ifdef ASSIGNMENT_DEBUG_DUMP
+        fprintf(stderr, "Calling function: %s.\n", callee->getName().bytes_begin());
+#endif
         if (callee == fInput) {
             int val;
 #ifndef ASSIGNMENT_DEBUG
@@ -314,21 +391,24 @@ public:
             dHeap.release(chunkVMAddr);
         } else { // For customized functions, handle call & return here
             // Create new call stack
-            dStack.push_back(StackFrame());
-            StackFrame &oldFrame = *(dStack.end() - 2), &newFrame = *(dStack.end() - 1);
+            dStack.emplace_back();
+#define oldFrame (dStack.end() - 2)
+#define newFrame (dStack.end() - 1)
             // Copy argument values to corresponding parameter bindings
             uint_t paramCount = callee->getNumParams();
             for (int i = 0; i < paramCount; i++) {
                 Expr *argExpr = callexpr->getArg(i);
-                int argVal = oldFrame.getStmtVal(argExpr);
+                int argVal = oldFrame->getStmtVal(argExpr);
                 Decl *paramDecl = callee->getParamDecl(i);
-                newFrame.bindDecl(paramDecl, argVal);
+                newFrame->bindDecl(paramDecl, argVal); // Parameters are on the stack frame
             }
             // Visit new function
             iVisitor->VisitStmt(callee->getBody());
             // Collect return value
-            int retVal = newFrame.getRetVal();
-            oldFrame.bindStmt(callexpr, retVal);
+            int retVal = newFrame->getRetVal();
+            oldFrame->bindStmt(callexpr, retVal);
+#undef oldFrame
+#undef newFrame
             // Pop call stack
             dStack.pop_back();
         }
@@ -339,9 +419,9 @@ public:
     }
 
     void ret(ReturnStmt *retStmt) {
-         Expr *retExpr = retStmt->getRetValue();
-         int retVal = dStack.back().getStmtVal(retExpr);
-         dStack.back().setRetVal(retVal);
+        Expr *retExpr = retStmt->getRetValue();
+        int retVal = dStack.back().getStmtVal(retExpr);
+        dStack.back().setRetVal(retVal);
     }
 
     void ifStmt(IfStmt *ifStmt) {
