@@ -283,7 +283,7 @@ public:
         dStack.back().bindStmt(intLiteral, literalVal);
     }
 
-    void binop(BinaryOperator *bop) {
+    void binaryOperator(BinaryOperator *bop) {
         Expr *LHSExpr = bop->getLHS();
         Expr *RHSExpr = bop->getRHS();
         auto opStr = bop->getOpcodeStr();
@@ -325,7 +325,7 @@ public:
         }
     }
 
-    void uop(UnaryOperator *uop) {
+    void unaryOperator(UnaryOperator *uop) {
         Expr *subExpr = uop->getSubExpr();
         int subVal = dStack.back().getStmtVal(subExpr);
         auto opStr = uop->getOpcodeStr(uop->getOpcode());
@@ -340,7 +340,11 @@ public:
         dStack.back().bindStmt(uop, result);
     }
 
-    void decl(DeclStmt *declstmt) {
+    void arraySubscriptExpr(ArraySubscriptExpr *arrSubExpr) {
+
+    }
+
+    void declStmt(DeclStmt *declstmt) {
         for (DeclStmt::decl_iterator it = declstmt->decl_begin(), ie = declstmt->decl_end();
              it != ie; ++it) {
             Decl *decl = *it;
@@ -360,27 +364,26 @@ public:
         }
     }
 
-    void declref(DeclRefExpr *declref) {
+    void declRefExpr(DeclRefExpr *declRefExpr) {
         // Variable maybe global or on the stack frame
-        dStack.back().setPC(declref);
-        if (declref->getType()->isIntegerType()) {
-            Decl *decl = declref->getFoundDecl();
+        dStack.back().setPC(declRefExpr);
+        if (declRefExpr->getType()->isIntegerType()) {
+            Decl *decl = declRefExpr->getFoundDecl();
             int val = getDeclVal(decl);
-            dStack.back().bindStmt(declref, val);
+            dStack.back().bindStmt(declRefExpr, val);
         }
     }
 
-    void cast(CastExpr *castexpr) {
-        dStack.back().setPC(castexpr);
-        if (castexpr->getType()->isIntegerType()) {
-            Expr *expr = castexpr->getSubExpr();
+    void castExpr(CastExpr *castExpr) {
+        dStack.back().setPC(castExpr);
+        if (castExpr->getType()->isIntegerType()) {
+            Expr *expr = castExpr->getSubExpr();
             int val = dStack.back().getStmtVal(expr);
-            dStack.back().bindStmt(castexpr, val);
+            dStack.back().bindStmt(castExpr, val);
         }
     }
 
-    /// !TODO Support Function Call
-    void call(CallExpr *callexpr) {
+    void callExpr(CallExpr *callexpr) {
         dStack.back().setPC(callexpr);
         FunctionDecl *callee = callexpr->getDirectCallee();
 #ifdef ASSIGNMENT_DEBUG_DUMP
@@ -439,7 +442,7 @@ public:
 
     }
 
-    void ret(ReturnStmt *retStmt) {
+    void returnStmt(ReturnStmt *retStmt) {
         Expr *retExpr = retStmt->getRetValue();
         int retVal = dStack.back().getStmtVal(retExpr);
         dStack.back().setRetVal(retVal);

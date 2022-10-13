@@ -24,6 +24,8 @@ public:
 
     virtual void VisitUnaryOperator(UnaryOperator *uop);
 
+    virtual void VisitArraySubscriptExpr(ArraySubscriptExpr *arrSubExpr);
+
     virtual void VisitDeclRefExpr(DeclRefExpr *expr);
 
     virtual void VisitCastExpr(CastExpr *expr);

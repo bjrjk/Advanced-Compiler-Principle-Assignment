@@ -7,31 +7,35 @@ void InterpreterVisitor::VisitIntegerLiteral(IntegerLiteral *intLiteral) {
 
 void InterpreterVisitor::VisitBinaryOperator(BinaryOperator *bop) {
     VisitStmt(bop);
-    mEnv->binop(bop);
+    mEnv->binaryOperator(bop);
 }
 
 void InterpreterVisitor::VisitUnaryOperator(UnaryOperator *uop) {
     VisitStmt(uop);
-    mEnv->uop(uop);
+    mEnv->unaryOperator(uop);
+}
+
+void InterpreterVisitor::VisitArraySubscriptExpr(ArraySubscriptExpr *arrSubExpr) {
+
 }
 
 void InterpreterVisitor::VisitDeclRefExpr(DeclRefExpr *expr) {
     VisitStmt(expr);
-    mEnv->declref(expr);
+    mEnv->declRefExpr(expr);
 }
 
 void InterpreterVisitor::VisitCastExpr(CastExpr *expr) {
     VisitStmt(expr);
-    mEnv->cast(expr);
+    mEnv->castExpr(expr);
 }
 
 void InterpreterVisitor::VisitCallExpr(CallExpr *call) {
     VisitStmt(call);
-    mEnv->call(call);
+    mEnv->callExpr(call);
 }
 
 void InterpreterVisitor::VisitDeclStmt(DeclStmt *declstmt) {
-    mEnv->decl(declstmt);
+    mEnv->declStmt(declstmt);
 }
 
 void InterpreterVisitor::VisitExpr(Expr *expr) {
@@ -41,7 +45,7 @@ void InterpreterVisitor::VisitExpr(Expr *expr) {
 
 void InterpreterVisitor::VisitReturnStmt(ReturnStmt *retStmt) {
     VisitStmt(retStmt);
-    mEnv->ret(retStmt);
+    mEnv->returnStmt(retStmt);
 }
 
 void InterpreterVisitor::VisitIfStmt(IfStmt *ifStmt) {
