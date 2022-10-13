@@ -51,8 +51,9 @@ private:
     // The current stmt
     Stmt *mPC;
     int mRetVal;
+    bool mHasRetVal;
 public:
-    StackFrame() : mVars(), mExprs(), mPC(), mRetVal(0) {}
+    StackFrame() : mVars(), mExprs(), mPC(), mRetVal(0), mHasRetVal(false) {}
 
     void bindDecl(Decl *decl, int val) {
         mVars[decl] = val;
@@ -86,10 +87,15 @@ public:
 
     void setRetVal(int retVal) {
         mRetVal = retVal;
+        mHasRetVal = true;
     }
 
     int getRetVal() const {
         return mRetVal;
+    }
+
+    bool hasRetVal() const {
+        return mHasRetVal;
     }
 };
 
@@ -471,6 +477,15 @@ public:
             if (condVal == 0) break;
             iVisitor->Visit(forStmt->getBody());
             iVisitor->Visit(forStmt->getInc());
+        }
+    }
+
+    void stmt(Stmt *stmt) {
+        for (auto *SubStmt : stmt->children()) {
+            if (dStack.back().hasRetVal()) break; // Stop from executing current function after return statement
+            if (SubStmt) {
+                iVisitor->Visit(SubStmt);
+            }
         }
     }
 };

@@ -55,3 +55,7 @@ void InterpreterVisitor::VisitWhileStmt(WhileStmt *whileStmt) {
 void InterpreterVisitor::VisitForStmt(ForStmt *forStmt) {
     mEnv->forStmt(forStmt);
 }
+
+void InterpreterVisitor::VisitStmt(Stmt *stmt) {
+    mEnv->stmt(stmt);
+}

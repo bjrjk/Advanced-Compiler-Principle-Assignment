@@ -42,6 +42,8 @@ public:
 
     virtual void VisitForStmt(ForStmt *forStmt);
 
+    virtual void VisitStmt(Stmt *stmt);
+
 private:
     Environment *mEnv;
 };
