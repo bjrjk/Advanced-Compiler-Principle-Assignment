@@ -240,6 +240,9 @@ public:
     // Initialize the Environment
     void init(TranslationUnitDecl *unit, InterpreterVisitor *visitor) {
         iVisitor = visitor;
+        // Prevent `dStack` vector from reallocating thus automatically freeing auto array on heap won't happen,
+        // meanwhile the stack depth is limited to 1024.
+        dStack.reserve(1024);
         // Create initialization stack frame
         dStack.emplace_back();
         // Do initialization
@@ -251,6 +254,15 @@ public:
                 else if (fDecl->getName().equals("GET")) fInput = fDecl;
                 else if (fDecl->getName().equals("PRINT")) fOutput = fDecl;
                 else if (fDecl->getName().equals("main")) fEntry = fDecl;
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                if (fDecl->getDefinition() == nullptr) {
+                    fprintf(stderr, "[+] Function prototype %s on %p.\n",
+                            fDecl->getDeclName().getAsString().c_str(), fDecl);
+                } else {
+                    fprintf(stderr, "[+] Function declaration %s on %p, definition on %p.\n",
+                            fDecl->getDeclName().getAsString().c_str(), fDecl, fDecl->getDefinition());
+                }
+#endif
             } else if (VarDecl *vDecl = dyn_cast<VarDecl>(*i)) {
                 // Collect global variables and their init values
                 int initVal = 0;
@@ -261,7 +273,7 @@ public:
                 }
                 dStaticData.set(vDecl, initVal);
 #ifdef ASSIGNMENT_DEBUG_DUMP
-                fprintf(stderr, "Global variable %s=%d on %p.\n",
+                fprintf(stderr, "[+] Global variable %s=%d on %p.\n",
                         vDecl->getDeclName().getAsString().c_str(), initVal, vDecl);
 #endif
             }
@@ -270,6 +282,9 @@ public:
         dStack.pop_back();
         // Create stack frame for main
         dStack.emplace_back();
+#ifdef ASSIGNMENT_DEBUG_DUMP
+        fprintf(stderr, "[*] Entering entrypoint main on %p.\n", fEntry);
+#endif
     }
 
     void bindDecl(Decl *decl, int val) {
@@ -315,7 +330,7 @@ public:
             } else if (ArraySubscriptExpr *arrSubExpr = dyn_cast<ArraySubscriptExpr>(LHSExpr)) {
                 int LHSAddr = dStack.back().getStmtVal(LHSExpr);
                 Heap::allocator->set(LHSAddr, RHSVal);
-            } else if (UnaryOperator * uop = dyn_cast<UnaryOperator>(LHSExpr)) {
+            } else if (UnaryOperator *uop = dyn_cast<UnaryOperator>(LHSExpr)) {
                 if (uop->getOpcodeStr(uop->getOpcode()).equals("*")) { // dereference
                     int LHSAddr = dStack.back().getStmtVal(LHSExpr);
                     Heap::allocator->set(LHSAddr, RHSVal);
@@ -417,7 +432,7 @@ public:
                         initVal = dStack.back().getStmtVal(initExpr);
                     }
 #ifdef ASSIGNMENT_DEBUG_DUMP
-                    fprintf(stderr, "Local int variable %s=%d on %p.\n",
+                    fprintf(stderr, "[+] Local int variable %s=%d on %p.\n",
                             vardecl->getDeclName().getAsString().c_str(), initVal, vardecl);
 #endif
                 } else if (vardecl->getType()->isConstantArrayType()) {
@@ -426,13 +441,13 @@ public:
                     int heapAddr = Heap::allocator->allocate(arrLength * sizeof(int));
                     initVal = heapAddr;
 #ifdef ASSIGNMENT_DEBUG_DUMP
-                    fprintf(stderr, "Local array %s[%u] at VMHeapAddr 0x%x, size %lu, on %p.\n",
+                    fprintf(stderr, "[+] Local array %s[%u] at VMHeapAddr 0x%x, size %lu, on %p.\n",
                             vardecl->getDeclName().getAsString().c_str(), arrLength,
                             heapAddr, arrLength * sizeof(int), vardecl);
 #endif
                 } else if (vardecl->getType()->isPointerType()) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
-                    fprintf(stderr, "Local pointer %s on %p.\n",
+                    fprintf(stderr, "[+] Local pointer %s on %p.\n",
                             vardecl->getDeclName().getAsString().c_str(), vardecl);
 #endif
                 }
@@ -466,7 +481,7 @@ public:
             if (castExpr->getCastKind() == clang::CK_LValueToRValue) {
                 if (ArraySubscriptExpr *arrSubExpr = dyn_cast<ArraySubscriptExpr>(subExpr)) {
                     val = Heap::allocator->get(val);
-                } else if (UnaryOperator * uop = dyn_cast<UnaryOperator>(subExpr)) {
+                } else if (UnaryOperator *uop = dyn_cast<UnaryOperator>(subExpr)) {
                     if (uop->getOpcodeStr(uop->getOpcode()).equals("*")) { // dereference
                         val = Heap::allocator->get(val);
                     }
@@ -480,7 +495,8 @@ public:
         dStack.back().setPC(callexpr);
         FunctionDecl *callee = callexpr->getDirectCallee();
 #ifdef ASSIGNMENT_DEBUG_DUMP
-        fprintf(stderr, "Calling function: %s.\n", callee->getName().bytes_begin());
+        fprintf(stderr, "[*] Calling function: %s on %p, definition on %p.\n", callee->getName().bytes_begin(), callee,
+                callee->getDefinition());
 #endif
         if (callee == fInput) {
             int val;
@@ -507,6 +523,8 @@ public:
             int chunkVMAddr = dStack.back().getStmtVal(chunkVMAddrExpr);
             dHeap.release(chunkVMAddr);
         } else { // For customized functions, handle call & return here
+            // Get real definition instead of prototype or unable to visit its statement & its variables
+            callee = callee->getDefinition();
             // Create new call stack
             dStack.emplace_back();
 #define oldFrame (dStack.end() - 2)
@@ -516,8 +534,12 @@ public:
             for (int i = 0; i < paramCount; i++) {
                 Expr *argExpr = callexpr->getArg(i);
                 int argVal = oldFrame->getStmtVal(argExpr);
-                Decl *paramDecl = callee->getParamDecl(i);
+                ParmVarDecl *paramDecl = callee->getParamDecl(i);
                 newFrame->bindDecl(paramDecl, argVal); // Parameters are on the stack frame
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                fprintf(stderr, "\t- Function parameter %d on %p: %s=%d.\n", i, paramDecl,
+                        paramDecl->getName().bytes_begin(), argVal);
+#endif
             }
             // Visit new function
             iVisitor->VisitStmt(callee->getBody());
@@ -532,7 +554,7 @@ public:
     }
 
     void parenExpr(ParenExpr *parenExpr) {
-        Expr * subExpr = parenExpr->getSubExpr();
+        Expr *subExpr = parenExpr->getSubExpr();
         int val = dStack.back().getStmtVal(subExpr);
         dStack.back().bindStmt(parenExpr, val);
     }
