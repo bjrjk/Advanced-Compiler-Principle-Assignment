@@ -388,6 +388,13 @@ public:
             result = -subVal;
         } else if (opStr.equals("*")) {
             result = subVal; // Still store address here
+        } else if (opStr.equals("++")) {
+            result = ++subVal;
+            if (DeclRefExpr *declRefExpr = dyn_cast<DeclRefExpr>(subExpr)) {
+                Decl *decl = declRefExpr->getFoundDecl();
+                dStack.back().bindDecl(decl, subVal);
+            }
+            dStack.back().bindStmt(subExpr, result);
         } else {
             assert(false);
             result = 0;
