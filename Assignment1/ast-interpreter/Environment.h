@@ -52,8 +52,9 @@ private:
         uint_t length, capacity; // in bytes
         char *pointer; // real pointer in host
     public:
-        chunkMeta(uint_t length, uint_t &addressAccumulator) : length(length) {
-            this->begin = addressAccumulator;
+        chunkMeta(uint_t length, uint_t &addressAccumulator) {
+            this->begin = addressAccumulator;;
+            this->length = length = (length << 2); // patch here to prevent from char treated as int leading to OOB
             this->capacity = (length + 7) & 0xfffffff8; // align chunk to 8 bytes
             addressAccumulator += capacity;
             this->pointer = static_cast<char *>(malloc(this->capacity));
