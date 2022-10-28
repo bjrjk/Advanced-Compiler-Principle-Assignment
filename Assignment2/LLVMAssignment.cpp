@@ -19,6 +19,7 @@
 #include <utility>
 #include <string>
 #include <iterator>
+#include <algorithm>
 
 #include "util.hpp"
 
@@ -61,8 +62,9 @@ struct FuncPtrPass : public ModulePass {
 
     FuncPtrPass() : ModulePass(ID) {}
 
-    bool analyseFunction(Function *func) {
+    bool analyseFunction(Function *func, vector<Function *> &reachedFunc) {
         bool changed = false;
+        bool tmp;
 
         assert(func != nullptr);
 #ifdef ASSIGNMENT_DEBUG_DUMP
@@ -77,17 +79,39 @@ struct FuncPtrPass : public ModulePass {
                         auto *calledFunc = callBase->getCalledFunction();
                         auto calledFuncName = calledFunc->getName();
                         if (!calledFuncName.startswith("llvm.dbg")) { // Disregard llvm internal debug functions
-                            bool tmp = add_if_not_exist(callGraphNode[func], callBase);
+                            tmp = add_if_not_exist(callGraphNode[func], callBase);
                             tmp |= add_if_not_exist(callGraphEdge[callBase], calledFunc);
+                            tmp |= add_if_not_exist(reachedFunc, calledFunc);
                             changed |= tmp;
 #ifdef ASSIGNMENT_DEBUG_DUMP
                             fprintf(stderr, "\t- Handling direct function call %s (%p) at line %d: %d.\n",
                                     calledFuncName.data(), calledFunc, inst.getDebugLoc().getLine(), tmp);
 #endif
+                            // Handle direct call function pointer argument to parameter binding
+                            for (auto &callArgument: callBase->args()) {
+                                // Process function pointers only
+                                if (!callArgument->getType()->isPointerTy()) continue;
+                                if (!dyn_cast<PointerType>(
+                                        callArgument->getType())->getElementType()->isFunctionTy())
+                                    continue;
+
+                                auto callParameter = calledFunc->getArg(callArgument.getOperandNo());
+
+                                tmp = add_if_not_exist(funcPtr, cast<Value>(callParameter));
+                                tmp |= add_if_not_exist(funcPtr, cast<Value>(callArgument));
+                                tmp |= add_if_not_exist(funcPtrBind[cast<Value>(callParameter)],
+                                                        cast<Value>(callArgument));
+                                changed |= tmp;
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                                fprintf(stderr,
+                                        "\t\t- Handling %dth function pointer argument %s (%p) to parameter %s (%p) binding: %d.\n",
+                                        callArgument.getOperandNo(), callArgument->getName().data(), &callArgument,
+                                        callParameter->getName().data(), callParameter, tmp);
+#endif
+                            }
                         }
                     } else { // Handle indirect call
                         Value *calledFuncValue = callBase->getCalledOperand(); // This should be a function pointer definition statement
-                        bool tmp;
 
                         tmp = add_if_not_exist(funcPtr, calledFuncValue);
                         tmp |= add_if_not_exist(funcCall, callBase);
@@ -97,23 +121,37 @@ struct FuncPtrPass : public ModulePass {
                                 calledFuncValue->getName().data(), calledFuncValue,
                                 inst.getDebugLoc().getLine(), tmp);
 #endif
-                        if (PHINode *phiNode = dyn_cast<PHINode>(calledFuncValue)) {
-                            for (auto &use: phiNode->operands()) {
-                                if (Function *calleeFunc = dyn_cast<Function>(&use)) {
-                                    tmp = add_if_not_exist(funcPtrValue[calledFuncValue], calleeFunc);
-                                    changed |= tmp;
+                        // Handle indirect call function pointer argument to parameter binding
+
+                    }
+                } else if (auto *phiNode = dyn_cast<PHINode>(&inst)) {
+                    // Process function pointers only
+                    if (!phiNode->getType()->isPointerTy()) continue;
+                    if (!dyn_cast<PointerType>(phiNode->getType())->getElementType()->isFunctionTy()) continue;
+
+                    for (auto &use: phiNode->operands()) {
+                        if (Function *calleeFunc = dyn_cast<Function>(&use)) {
+                            tmp = add_if_not_exist(funcPtrValue[cast<Value>(phiNode)], calleeFunc);
+                            changed |= tmp;
 #ifdef ASSIGNMENT_DEBUG_DUMP
-                                    fprintf(stderr, "\t\t- Possible callee: %s, %d.\n",
-                                            calleeFunc->getName().data(), tmp);
+                            fprintf(stderr, "\t- Possible callee for %s: %s, %d.\n",
+                                    phiNode->getName().data(), calleeFunc->getName().data(), tmp);
 #endif
-                                } else if (ConstantPointerNull *nullFuncPtr = dyn_cast<ConstantPointerNull>(&use)) {
+                        } else if (ConstantPointerNull *nullFuncPtr = dyn_cast<ConstantPointerNull>(&use)) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
-                                    fprintf(stderr, "\t\t- Possible callee: NULL, discarded.\n");
+                            fprintf(stderr, "\t- Possible callee for %s: NULL, discarded.\n",
+                                    phiNode->getName().data());
 #endif
-                                } else {
-                                    assert(false);
-                                }
-                            }
+                        } else if (use->getType()->isPointerTy() &&
+                                   dyn_cast<PointerType>(use->getType())->getElementType()->isFunctionTy()) {
+                            tmp = add_if_not_exist(funcPtr, cast<Value>(phiNode));
+                            tmp |= add_if_not_exist(funcPtr, cast<Value>(&use));
+                            tmp |= add_if_not_exist(funcPtrBind[cast<Value>(phiNode)], cast<Value>(&use));
+                            changed |= tmp;
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                            fprintf(stderr, "\t- Binding function pointer %s to %s: %d.\n",
+                                    use->getName().data(), phiNode->getName().data(), tmp);
+#endif
                         } else {
                             assert(false);
                         }
@@ -144,7 +182,7 @@ struct FuncPtrPass : public ModulePass {
             fprintf(stderr, "[*] Building call graph: loop %d.\n", ++loopCounter);
 #endif
             for (auto *reachedFuncPtr: reachedFunc) {
-                callGraphChanged |= analyseFunction(reachedFuncPtr);
+                callGraphChanged |= analyseFunction(reachedFuncPtr, reachedFunc);
             }
 
             bool funcPtrChanged = true;
@@ -161,11 +199,12 @@ struct FuncPtrPass : public ModulePass {
                             // Sort two funcPtrBind vector to compare them in order to decide whether to propagate bindings
                             stable_sort(funcPtr1Bind.begin(), funcPtr1Bind.end());
                             stable_sort(funcPtr2Bind.begin(), funcPtr2Bind.end());
-                            if (funcPtr1Bind != funcPtr2Bind) {
+                            if (!includes(funcPtr1Bind.begin(), funcPtr1Bind.end(),
+                                         funcPtr2Bind.begin(), funcPtr2Bind.end())) {
                                 vector<Value *> tmpContainer;
 #ifdef ASSIGNMENT_DEBUG_DUMP
-                                fprintf(stderr, "\t- Binding function pointer %s (%p) to %s (%p).\n",
-                                        funcPtr1->getName().data(), funcPtr1, funcPtr2->getName().data(), funcPtr2);
+                                fprintf(stderr, "\t- Transmitting function pointer closure %s (%p) to %s (%p).\n",
+                                        funcPtr2->getName().data(), funcPtr2, funcPtr1->getName().data(), funcPtr1);
 #endif
                                 // Union funcPtr2Bind to funcPtr1Bind if they are not equal
                                 set_union(funcPtr1Bind.begin(), funcPtr1Bind.end(),
@@ -234,13 +273,27 @@ struct FuncPtrPass : public ModulePass {
     }
 
     void printResult() {
-        for (auto &resultPair: callGraphEdge) {
-            auto callBase = resultPair.first;
-            auto &maybeCalledFuncs = resultPair.second;
-            printf("%u :", callBase->getDebugLoc().getLine());
+        vector<CallBase *> tmpSortContainer;
+        for_each(callGraphEdge.begin(), callGraphEdge.end(), [&](auto &pair) {
+            tmpSortContainer.push_back(pair.first);
+        });
+        stable_sort(tmpSortContainer.begin(), tmpSortContainer.end(), [](CallBase *cb1, CallBase *cb2) {
+            return cb1->getDebugLoc().getLine() < cb2->getDebugLoc().getLine();
+        });
+
+        for (auto callBase: tmpSortContainer) {
+            auto &maybeCalledFuncs = callGraphEdge[callBase];
             bool flag = true;
+            vector<string> tmpContainer;
+
             for (auto maybeCalledFunc: maybeCalledFuncs) {
-                printf(", %s" + flag, maybeCalledFunc->getName().data());
+                tmpContainer.push_back(maybeCalledFunc->getName().data());
+            }
+            stable_sort(tmpContainer.begin(), tmpContainer.end());
+
+            printf("%u :", callBase->getDebugLoc().getLine());
+            for (auto &maybeCalledFuncName: tmpContainer) {
+                printf(", %s" + flag, maybeCalledFuncName.data());
                 flag = false;
             }
             printf("\n");
