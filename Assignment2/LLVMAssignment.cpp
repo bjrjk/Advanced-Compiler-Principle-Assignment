@@ -231,8 +231,6 @@ struct FuncPtrPass : public ModulePass {
         bool callGraphChanged = true;
         bool tmp;
 
-        callGraphNode.clear();
-        callGraphEdge.clear();
         callGraphNode[entrypoint].push_back(nullptr);
         reachedFunc.push_back(entrypoint);
 
@@ -321,54 +319,38 @@ struct FuncPtrPass : public ModulePass {
 
     }
 
-    Function *findProgramEntrypoint(Module &m) {
-        Function *entrypoint = nullptr;
-
-        for (auto &funcIter: m) {
-            if (!funcIter.getName().startswith("llvm.dbg")) {
-                entrypoint = &funcIter;
-            }
-        }
-
-        assert(entrypoint != nullptr);
-#ifdef ASSIGNMENT_DEBUG_DUMP
-        fprintf(stderr, "[+] Program entrypoint is %s at %p.\n",
-                entrypoint->getName().data(), entrypoint);
-#endif
-        return entrypoint;
-    }
-
     void printResult() {
-        vector<CallBase *> tmpSortContainer;
+        map<unsigned int, vector<string>> sortContainer;
+
         for_each(callGraphEdge.begin(), callGraphEdge.end(), [&](auto &pair) {
-            tmpSortContainer.push_back(pair.first);
-        });
-        stable_sort(tmpSortContainer.begin(), tmpSortContainer.end(), [](CallBase *cb1, CallBase *cb2) {
-            return cb1->getDebugLoc().getLine() < cb2->getDebugLoc().getLine();
+            CallBase *callBase = pair.first;
+            vector<Function *> callees = pair.second;
+            unsigned int sourceLine = callBase->getDebugLoc().getLine();
+            for_each(callees.begin(), callees.end(), [&](Function *callee) {
+                sortContainer[sourceLine].push_back(callee->getName().data());
+            });
         });
 
-        for (auto callBase: tmpSortContainer) {
-            auto &maybeCalledFuncs = callGraphEdge[callBase];
+        for_each(sortContainer.begin(), sortContainer.end(), [&](auto &lineCalleeNamePairs) {
+            int lineNumber = lineCalleeNamePairs.first;
+            vector<string> &lineCallees = lineCalleeNamePairs.second;
+            stable_sort(lineCallees.begin(), lineCallees.end());
+            printf("%u :", lineNumber);
             bool flag = true;
-            vector<string> tmpContainer;
-
-            for (auto maybeCalledFunc: maybeCalledFuncs) {
-                tmpContainer.push_back(maybeCalledFunc->getName().data());
-            }
-            stable_sort(tmpContainer.begin(), tmpContainer.end());
-
-            printf("%u :", callBase->getDebugLoc().getLine());
-            for (auto &maybeCalledFuncName: tmpContainer) {
+            for (auto &maybeCalledFuncName: lineCallees) {
                 printf(", %s" + flag, maybeCalledFuncName.data());
                 flag = false;
             }
             printf("\n");
-        }
+        });
     }
 
     void main(Module &m) {
-        auto entrypointPtr = findProgramEntrypoint(m);
-        buildCallGraph(m, entrypointPtr);
+        for (auto &funcIter: m) {
+            if (!funcIter.getName().startswith("llvm.dbg")) {
+                buildCallGraph(m, &funcIter);
+            }
+        }
         printResult();
     }
 
