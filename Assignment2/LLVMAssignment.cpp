@@ -77,6 +77,7 @@ struct FuncPtrPass : public ModulePass {
         for (auto &BB: *func) {
             for (auto &inst: BB) {
                 if (auto *callBase = dyn_cast<CallBase>(&inst)) { // Handle Callsite
+                    vector<Function *> calledFuncs;
                     if (!callBase->isIndirectCall()) { // Handle direct call
                         auto *calledFunc = callBase->getCalledFunction();
                         auto calledFuncName = calledFunc->getName();
@@ -85,84 +86,101 @@ struct FuncPtrPass : public ModulePass {
                             tmp |= add_if_not_exist(callGraphEdge[callBase], calledFunc);
                             tmp |= add_if_not_exist(reachedFunc, calledFunc);
                             changed |= tmp;
+                            calledFuncs.push_back(calledFunc);
 #ifdef ASSIGNMENT_DEBUG_DUMP
                             fprintf(stderr, "\t- Handling direct function call %s (%p) at line %d: %d.\n",
                                     calledFuncName.data(), calledFunc, inst.getDebugLoc().getLine(), tmp);
 #endif
-                            // Handle direct call function pointer argument to parameter binding
-                            for (auto &callArgument: callBase->args()) {
-                                // Process function pointers only
-                                if (!callArgument->getType()->isPointerTy()) continue;
-                                if (!dyn_cast<PointerType>(
-                                        callArgument->getType())->getElementType()->isFunctionTy())
-                                    continue;
-
-                                auto callParameter = calledFunc->getArg(callArgument.getOperandNo());
-
-                                tmp = add_if_not_exist(funcPtr, cast<Value>(callParameter));
-                                if (!isa<Function>(callArgument)) { // Assign a function pointer argument to parameter
-                                    tmp |= add_if_not_exist(funcPtr, cast<Value>(callArgument));
-                                    tmp |= add_if_not_exist(funcPtrBind[cast<Value>(callParameter)],
-                                                            cast<Value>(callArgument));
-
-#ifdef ASSIGNMENT_DEBUG_DUMP
-                                    fprintf(stderr,
-                                            "\t\t- Handling %dth function pointer argument %s (%p) to parameter %s (%p) binding: %d.\n",
-                                            callArgument.getOperandNo(), callArgument->getName().data(), &callArgument,
-                                            callParameter->getName().data(), callParameter, tmp);
-#endif
-                                } else { // Assign a function entity argument to parameter
-                                    tmp |= add_if_not_exist(funcPtrValue[cast<Value>(callParameter)],
-                                                           cast<Function>(callArgument));
-#ifdef ASSIGNMENT_DEBUG_DUMP
-                                    fprintf(stderr,
-                                            "\t\t- Handling %dth function entity argument %s (%p) to parameter %s (%p) binding: %d.\n",
-                                            callArgument.getOperandNo(), callArgument->getName().data(), &callArgument,
-                                            callParameter->getName().data(), callParameter, tmp);
-#endif
-                                }
-                                changed |= tmp;
-                            }
-
-                            // Handle direct call function pointer return value binding
-                            do {
-                                auto functionRetValType = calledFunc->getReturnType();
-                                if (!functionRetValType->isPointerTy()) break;
-                                if (!dyn_cast<PointerType>(functionRetValType)->getElementType()->isFunctionTy())
-                                    break;
-                                if (!funcRetValue.count(calledFunc)) {
-                                    // calledFunc hasn't been visited, defering process
-#ifdef ASSIGNMENT_DEBUG_DUMP
-                                    fprintf(stderr, "\t\t- Defered handling function pointer return value binding.\n");
-#endif
-                                    changed = true;
-                                } else {
-                                    // calledFunc has been visited, do binding
-                                    tmp = add_if_not_exist(funcPtrBind[cast<Value>(callBase)],
-                                                           funcRetValue[calledFunc]);
-                                    changed |= tmp;
-#ifdef ASSIGNMENT_DEBUG_DUMP
-                                    fprintf(stderr, "\t\t- Handling function pointer return value binding from caller site: "
-                                                    "%s -> %s: %d\n", funcRetValue[calledFunc]->getName().data(),
-                                            callBase->getName().data(), tmp);
-#endif
-                                }
-                            } while (false);
                         }
+
                     } else { // Handle indirect call
                         Value *calledFuncValue = callBase->getCalledOperand(); // This should be a function pointer definition statement
 
                         tmp = add_if_not_exist(funcPtr, calledFuncValue);
                         tmp |= add_if_not_exist(funcCall, callBase);
                         changed |= tmp;
+
+                        copy(funcPtrValue[calledFuncValue].begin(), funcPtrValue[calledFuncValue].end(),
+                             back_inserter(calledFuncs));
+                        for (auto bindedFuncPtr: funcPtrBind[calledFuncValue]) {
+                            copy(funcPtrValue[bindedFuncPtr].begin(), funcPtrValue[bindedFuncPtr].end(),
+                                 back_inserter(calledFuncs));
+                        }
+
+
 #ifdef ASSIGNMENT_DEBUG_DUMP
                         fprintf(stderr, "\t- Handling indirect function (pointer) call %s (%p) at line %d: %d.\n",
                                 calledFuncValue->getName().data(), calledFuncValue,
                                 inst.getDebugLoc().getLine(), tmp);
 #endif
-                        // TODO: Handle indirect call function pointer argument to parameter binding
-
                     }
+
+                    for (auto calledFunc: calledFuncs) {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                        fprintf(stderr, "\t\t- Possible callee for this callsite: %s (%p).\n",
+                                calledFunc->getName().data(), calledFunc);
+#endif
+                        // Handle call function pointer argument to parameter binding
+                        for (auto &callArgument: callBase->args()) {
+                            // Process function pointers only
+                            if (!callArgument->getType()->isPointerTy()) continue;
+                            if (!dyn_cast<PointerType>(
+                                    callArgument->getType())->getElementType()->isFunctionTy())
+                                continue;
+
+                            auto callParameter = calledFunc->getArg(callArgument.getOperandNo());
+
+                            tmp = add_if_not_exist(funcPtr, cast<Value>(callParameter));
+                            if (!isa<Function>(callArgument)) { // Assign a function pointer argument to parameter
+                                tmp |= add_if_not_exist(funcPtr, cast<Value>(callArgument));
+                                tmp |= add_if_not_exist(funcPtrBind[cast<Value>(callParameter)],
+                                                        cast<Value>(callArgument));
+
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                                fprintf(stderr,
+                                        "\t\t\t- Handling %dth function pointer argument %s (%p) to parameter %s (%p) binding: %d.\n",
+                                        callArgument.getOperandNo(), callArgument->getName().data(), &callArgument,
+                                        callParameter->getName().data(), callParameter, tmp);
+#endif
+                            } else { // Assign a function entity argument to parameter
+                                tmp |= add_if_not_exist(funcPtrValue[cast<Value>(callParameter)],
+                                                        cast<Function>(callArgument));
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                                fprintf(stderr,
+                                        "\t\t\t- Handling %dth function entity argument %s (%p) to parameter %s (%p) binding: %d.\n",
+                                        callArgument.getOperandNo(), callArgument->getName().data(), &callArgument,
+                                        callParameter->getName().data(), callParameter, tmp);
+#endif
+                            }
+                            changed |= tmp;
+                        }
+
+                        // Handle call function pointer return value binding
+                        do {
+                            auto functionRetValType = calledFunc->getReturnType();
+                            if (!functionRetValType->isPointerTy()) break;
+                            if (!dyn_cast<PointerType>(functionRetValType)->getElementType()->isFunctionTy())
+                                break;
+                            if (!funcRetValue.count(calledFunc)) {
+                                // calledFunc hasn't been visited, defering process
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                                fprintf(stderr, "\t\t\t- Defered handling function pointer return value binding.\n");
+#endif
+                                changed = true;
+                            } else {
+                                // calledFunc has been visited, do binding
+                                tmp = add_if_not_exist(funcPtrBind[cast<Value>(callBase)],
+                                                       funcRetValue[calledFunc]);
+                                changed |= tmp;
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                                fprintf(stderr, "\t\t\t- Handling function pointer return value binding from caller site: "
+                                                "%s -> %s: %d\n", funcRetValue[calledFunc]->getName().data(),
+                                        callBase->getName().data(), tmp);
+#endif
+                            }
+                        } while (false);
+                    }
+
                 } else if (auto *phiNode = dyn_cast<PHINode>(&inst)) { // Handle PhiNode
                     // Process function pointers only
                     if (!phiNode->getType()->isPointerTy()) continue;

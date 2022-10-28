@@ -1,0 +1,5 @@
+12 : plus
+14 : minus
+20 : clever
+25 : foo
+31 : moo
