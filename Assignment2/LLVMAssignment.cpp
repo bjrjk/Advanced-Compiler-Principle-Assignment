@@ -59,6 +59,8 @@ struct FuncPtrPass : public ModulePass {
     map<Value *, vector<Value *>> funcPtrBind;
     map<Value *, vector<Function *>> funcPtrValue;
 
+    map<Function *, Value *> funcRetValue;
+
 
     FuncPtrPass() : ModulePass(ID) {}
 
@@ -74,7 +76,7 @@ struct FuncPtrPass : public ModulePass {
 
         for (auto &BB: *func) {
             for (auto &inst: BB) {
-                if (auto *callBase = dyn_cast<CallBase>(&inst)) {
+                if (auto *callBase = dyn_cast<CallBase>(&inst)) { // Handle Callsite
                     if (!callBase->isIndirectCall()) { // Handle direct call
                         auto *calledFunc = callBase->getCalledFunction();
                         auto calledFuncName = calledFunc->getName();
@@ -98,17 +100,54 @@ struct FuncPtrPass : public ModulePass {
                                 auto callParameter = calledFunc->getArg(callArgument.getOperandNo());
 
                                 tmp = add_if_not_exist(funcPtr, cast<Value>(callParameter));
-                                tmp |= add_if_not_exist(funcPtr, cast<Value>(callArgument));
-                                tmp |= add_if_not_exist(funcPtrBind[cast<Value>(callParameter)],
-                                                        cast<Value>(callArgument));
-                                changed |= tmp;
+                                if (!isa<Function>(callArgument)) { // Assign a function pointer argument to parameter
+                                    tmp |= add_if_not_exist(funcPtr, cast<Value>(callArgument));
+                                    tmp |= add_if_not_exist(funcPtrBind[cast<Value>(callParameter)],
+                                                            cast<Value>(callArgument));
+
 #ifdef ASSIGNMENT_DEBUG_DUMP
-                                fprintf(stderr,
-                                        "\t\t- Handling %dth function pointer argument %s (%p) to parameter %s (%p) binding: %d.\n",
-                                        callArgument.getOperandNo(), callArgument->getName().data(), &callArgument,
-                                        callParameter->getName().data(), callParameter, tmp);
+                                    fprintf(stderr,
+                                            "\t\t- Handling %dth function pointer argument %s (%p) to parameter %s (%p) binding: %d.\n",
+                                            callArgument.getOperandNo(), callArgument->getName().data(), &callArgument,
+                                            callParameter->getName().data(), callParameter, tmp);
 #endif
+                                } else { // Assign a function entity argument to parameter
+                                    tmp |= add_if_not_exist(funcPtrValue[cast<Value>(callParameter)],
+                                                           cast<Function>(callArgument));
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                                    fprintf(stderr,
+                                            "\t\t- Handling %dth function entity argument %s (%p) to parameter %s (%p) binding: %d.\n",
+                                            callArgument.getOperandNo(), callArgument->getName().data(), &callArgument,
+                                            callParameter->getName().data(), callParameter, tmp);
+#endif
+                                }
+                                changed |= tmp;
                             }
+
+                            // Handle direct call function pointer return value binding
+                            do {
+                                auto functionRetValType = calledFunc->getReturnType();
+                                if (!functionRetValType->isPointerTy()) break;
+                                if (!dyn_cast<PointerType>(functionRetValType)->getElementType()->isFunctionTy())
+                                    break;
+                                if (!funcRetValue.count(calledFunc)) {
+                                    // calledFunc hasn't been visited, defering process
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                                    fprintf(stderr, "\t\t- Defered handling function pointer return value binding.\n");
+#endif
+                                    changed = true;
+                                } else {
+                                    // calledFunc has been visited, do binding
+                                    tmp = add_if_not_exist(funcPtrBind[cast<Value>(callBase)],
+                                                           funcRetValue[calledFunc]);
+                                    changed |= tmp;
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                                    fprintf(stderr, "\t\t- Handling function pointer return value binding from caller site: "
+                                                    "%s -> %s: %d\n", funcRetValue[calledFunc]->getName().data(),
+                                            callBase->getName().data(), tmp);
+#endif
+                                }
+                            } while (false);
                         }
                     } else { // Handle indirect call
                         Value *calledFuncValue = callBase->getCalledOperand(); // This should be a function pointer definition statement
@@ -121,10 +160,10 @@ struct FuncPtrPass : public ModulePass {
                                 calledFuncValue->getName().data(), calledFuncValue,
                                 inst.getDebugLoc().getLine(), tmp);
 #endif
-                        // Handle indirect call function pointer argument to parameter binding
+                        // TODO: Handle indirect call function pointer argument to parameter binding
 
                     }
-                } else if (auto *phiNode = dyn_cast<PHINode>(&inst)) {
+                } else if (auto *phiNode = dyn_cast<PHINode>(&inst)) { // Handle PhiNode
                     // Process function pointers only
                     if (!phiNode->getType()->isPointerTy()) continue;
                     if (!dyn_cast<PointerType>(phiNode->getType())->getElementType()->isFunctionTy()) continue;
@@ -156,6 +195,13 @@ struct FuncPtrPass : public ModulePass {
                             assert(false);
                         }
                     }
+                } else if (auto * retInst = dyn_cast<ReturnInst>(&inst)) {
+                    tmp = funcRetValue.count(func);
+                    if (!tmp) funcRetValue[func] = retInst->getReturnValue();
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                    fprintf(stderr, "\t- Handling function pointer return value binding from callee site: "
+                                    "%s: %d.\n", retInst->getReturnValue()->getName().data(), !tmp);
+#endif
                 }
             }
         }
@@ -200,11 +246,13 @@ struct FuncPtrPass : public ModulePass {
                             stable_sort(funcPtr1Bind.begin(), funcPtr1Bind.end());
                             stable_sort(funcPtr2Bind.begin(), funcPtr2Bind.end());
                             if (!includes(funcPtr1Bind.begin(), funcPtr1Bind.end(),
-                                         funcPtr2Bind.begin(), funcPtr2Bind.end())) {
+                                          funcPtr2Bind.begin(), funcPtr2Bind.end())) {
                                 vector<Value *> tmpContainer;
 #ifdef ASSIGNMENT_DEBUG_DUMP
-                                fprintf(stderr, "\t- Transmitting function pointer closure %s (%p) to %s (%p).\n",
-                                        funcPtr2->getName().data(), funcPtr2, funcPtr1->getName().data(), funcPtr1);
+                                fprintf(stderr, "\t- Transmitting function pointer closure "
+                                                "%s (%p) to %s (%p).\n",
+                                        funcPtr2->getName().data(), funcPtr2,
+                                        funcPtr1->getName().data(), funcPtr1);
 #endif
                                 // Union funcPtr2Bind to funcPtr1Bind if they are not equal
                                 set_union(funcPtr1Bind.begin(), funcPtr1Bind.end(),

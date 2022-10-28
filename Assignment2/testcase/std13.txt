@@ -1,2 +1,2 @@
-30 : foo, clever
-31 : plus, minus
+30 : clever, foo
+31 : minus, plus
