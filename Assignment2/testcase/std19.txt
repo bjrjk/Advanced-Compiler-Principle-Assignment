@@ -1,2 +1,2 @@
-14 : plus
+14 : minus, plus
 28 : foo

@@ -355,10 +355,10 @@ struct FuncPtrPass : public ModulePass {
     }
 
     bool runOnModule(Module &M) override {
-        errs() << "Hello: ";
-        errs().write_escaped(M.getName()) << '\n';
-        M.dump();
-        errs() << "------------------------------\n";
+        //errs() << "Hello: ";
+        //errs().write_escaped(M.getName()) << '\n';
+        //M.dump();
+        //errs() << "------------------------------\n";
         main(M);
         return false;
     }
