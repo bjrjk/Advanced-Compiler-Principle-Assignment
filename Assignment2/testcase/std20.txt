@@ -1,0 +1,6 @@
+12 : add, sub
+23 : fprintf
+25 : fscanf
+36 : foo
+37 : fprintf
+39 : fprintf
