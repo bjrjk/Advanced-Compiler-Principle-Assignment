@@ -147,7 +147,7 @@ struct FuncPtrPass : public ModulePass {
                                                         cast<Function>(callArgument));
 #ifdef ASSIGNMENT_DEBUG_DUMP
                                 fprintf(stderr,
-                                        "\t\t\t- Handling %dth function entity argument %s (%p) to parameter %s (%p) binding: %d.\n",
+                                        "\t\t\t- Handling %dth function entity argument %s (%p) to parameter %s (%p) assigning: %d.\n",
                                         callArgument.getOperandNo(), callArgument->getName().data(), &callArgument,
                                         callParameter->getName().data(), callParameter, tmp);
 #endif
@@ -169,13 +169,14 @@ struct FuncPtrPass : public ModulePass {
                                 changed = true;
                             } else {
                                 // calledFunc has been visited, do binding
-                                tmp = add_if_not_exist(funcPtrBind[cast<Value>(callBase)],
+                                tmp = add_if_not_exist(funcPtr, cast<Value>(funcRetValue[calledFunc]));
+                                tmp |= add_if_not_exist(funcPtrBind[cast<Value>(callBase)],
                                                        funcRetValue[calledFunc]);
                                 changed |= tmp;
 #ifdef ASSIGNMENT_DEBUG_DUMP
                                 fprintf(stderr, "\t\t\t- Handling function pointer return value binding from caller site: "
-                                                "%s -> %s: %d\n", funcRetValue[calledFunc]->getName().data(),
-                                        callBase->getName().data(), tmp);
+                                                "%s (%p) -> %s (%p): %d\n", funcRetValue[calledFunc]->getName().data(), funcRetValue[calledFunc],
+                                        callBase->getName().data(), callBase, tmp);
 #endif
                             }
                         } while (false);
@@ -218,7 +219,7 @@ struct FuncPtrPass : public ModulePass {
                     if (!tmp) funcRetValue[func] = retInst->getReturnValue();
 #ifdef ASSIGNMENT_DEBUG_DUMP
                     fprintf(stderr, "\t- Handling function pointer return value binding from callee site: "
-                                    "%s: %d.\n", retInst->getReturnValue()->getName().data(), !tmp);
+                                    "%s(%p): %d.\n", retInst->getReturnValue()->getName().data(), retInst->getReturnValue(), !tmp);
 #endif
                 }
             }
@@ -348,6 +349,9 @@ struct FuncPtrPass : public ModulePass {
     void main(Module &m) {
         for (auto &funcIter: m) {
             if (!funcIter.getName().startswith("llvm.dbg")) {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                fprintf(stderr, "\n\n[!] Analyse Entrypoint: %s.\n", funcIter.getName().data());
+#endif
                 buildCallGraph(m, &funcIter);
             }
         }
