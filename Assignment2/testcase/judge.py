@@ -3,7 +3,7 @@
 
 import os
 
-MAX_TESTCASE_ID = 24
+MAX_TESTCASE_ID = 25
 TOTAL_TESTCASE_NUMBER = MAX_TESTCASE_ID + 1
 
 passed_testcase = 0
