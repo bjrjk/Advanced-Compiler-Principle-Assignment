@@ -30,7 +30,7 @@
 #include <llvm/Pass.h>
 #include <llvm/Support/raw_ostream.h>
 
-#include "Liveness.h"
+#include "PointerAnalysis.h"
 using namespace llvm;
 static ManagedStatic<LLVMContext> GlobalContext;
 static LLVMContext &getGlobalContext() { return *GlobalContext; }
@@ -64,26 +64,17 @@ struct FuncPtrPass : public ModulePass {
     }
 };
 
-
-char FuncPtrPass::ID = 0;
-static RegisterPass<FuncPtrPass> X("funcptrpass", "Print function call instruction");
-
-char Liveness::ID = 0;
-static RegisterPass<Liveness> Y("liveness", "Liveness Dataflow Analysis");
-
-static cl::opt<std::string>
-InputFilename(cl::Positional,
-              cl::desc("<filename>.bc"),
-              cl::init(""));
+char PointerAnalysis::ID = 0;
+static RegisterPass<PointerAnalysis> RP("PointerAnalysis", "May Point-to Analysis");
+static cl::opt<std::string> InputFilename(cl::Positional, cl::desc("<filename>.bc"), cl::init(""));
 
 
 int main(int argc, char **argv) {
    LLVMContext &Context = getGlobalContext();
    SMDiagnostic Err;
-   // Parse the command line to read the Inputfilename
-   cl::ParseCommandLineOptions(argc, argv,
-                              "FuncPtrPass \n My first LLVM too which does not do much.\n");
 
+   // Parse the command line to read the Inputfilename
+   cl::ParseCommandLineOptions(argc, argv,"");
 
    // Load the input module
    std::unique_ptr<Module> M = parseIRFile(InputFilename, Err, Context);
@@ -96,15 +87,12 @@ int main(int argc, char **argv) {
 #if LLVM_VERSION_MAJOR == 5
    Passes.add(new EnableFunctionOptPass());
 #endif
-   ///Transform it to SSA
+   // Transform it to SSA
    Passes.add(llvm::createPromoteMemoryToRegisterPass());
 
-   /// Your pass to print Function and Call Instructions
-   Passes.add(new Liveness());
-   //Passes.add(new FuncPtrPass());
+   /// Your pass to run pointer analysis
+   Passes.add(new PointerAnalysis());
+
    Passes.run(*M.get());
-#ifndef NDEBUG
-   system("pause");
-#endif
 }
 
