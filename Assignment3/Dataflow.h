@@ -86,28 +86,68 @@ struct DataflowResult {
 /// Compute a forward iterated fixedpoint dataflow function, using a user-supplied
 /// visitor function. Note that the caller must ensure that the function is
 /// in fact a monotone function, as otherwise the fixedpoint may not terminate.
+///
+/// Warning: This is a may forward analysis framework.
 /// 
 /// @param fn The function
 /// @param visitor A function to compute dataflow vals
-/// @param result The results of the dataflow 
-/// @initval the Initial dataflow value
+/// @param resultContainer The results of the dataflow
+/// @param initVal the Initial dataflow value
 template<class T>
 void analyzeForward(Function *fn,
                     DataflowVisitor<T> *visitor,
-                    typename DataflowResult<T>::Type *result,
+                    typename DataflowResult<T>::Type *resultContainer,
                     const T &initVal) {
-    return;
+    typename DataflowResult<T>::Type &result = *resultContainer;
+    std::set<BasicBlock *> workList;
+
+    // Initialize the workList with all blocks
+    for (auto bi = fn->begin(); bi != fn->end(); ++bi) {
+        BasicBlock *bb = &*bi;
+        result[bb] = DataflowFactPair<T>(initVal, initVal);
+        workList.insert(bb);
+    }
+
+    // Iteratively compute the dataflow result
+    while (!workList.empty()) {
+        BasicBlock *bb = *workList.begin();
+        workList.erase(workList.begin());
+
+        // Merge all incoming(input) value
+        T bbFact = result[bb].input; // Warning: assign constructor used here!
+        // Since this program point, bbFact is bb's input fact
+        for (auto pi = pred_begin(bb); pi != pred_end(bb); ++pi) {
+            BasicBlock *predBB = *pi;
+            visitor->merge(&bbFact, result[predBB].output);
+        }
+        result[bb].input = bbFact; // Warning: assign constructor used here!
+
+        // Transfer basic block
+        visitor->transferBasicBlock(bb, &bbFact, true);
+        // From now on, bbFact is bb's output fact
+
+        // If outgoing value changed, propagate it along the CFG
+        if (bbFact == result[bb].output) continue;
+        result[bb].output = bbFact; // Warning: assign constructor used here!
+
+        // Insert successor basic block into workList
+        for (auto si = succ_begin(bb); si != succ_end(bb); ++si) {
+            workList.insert(*si);
+        }
+    }
 }
 
 ///
 /// Compute a backward iterated fixedpoint dataflow function, using a user-supplied
 /// visitor function. Note that the caller must ensure that the function is
 /// in fact a monotone function, as otherwise the fixedpoint may not terminate.
-/// 
+///
+/// Warning: This is a may backward analysis framework.
+///
 /// @param fn The function
 /// @param visitor A function to compute dataflow vals
-/// @param result The results of the dataflow 
-/// @initval The initial dataflow value
+/// @param resultContainer The results of the dataflow
+/// @param initVal The initial dataflow value
 template<class T>
 void analyzeBackward(Function *fn,
                      DataflowVisitor<T> *visitor,
@@ -129,7 +169,7 @@ void analyzeBackward(Function *fn,
         BasicBlock *bb = *workList.begin();
         workList.erase(workList.begin());
 
-        // Merge all incoming value
+        // Merge all incoming(output) value
         T bbFact = result[bb].output; // Warning: assign constructor used here!
         // Since this program point, bbFact is bb's output fact
         for (auto si = succ_begin(bb); si != succ_end(bb); ++si) {
@@ -147,7 +187,7 @@ void analyzeBackward(Function *fn,
         result[bb].input = bbFact; // Warning: assign constructor used here!
 
         // Insert precedent basic block into workList
-        for (pred_iterator pi = pred_begin(bb); pi != pred_end(bb); ++pi) {
+        for (auto pi = pred_begin(bb); pi != pred_end(bb); ++pi) {
             workList.insert(*pi);
         }
     }
