@@ -17,6 +17,11 @@ message(STATUS "LLVM LIBS : ${LLVM_LINK_COMPONENTS}")
 file(GLOB SOURCE "./*.cpp") 
 add_executable(assignment3 ${SOURCE}) 
 
+option(ASSIGNMENT_DEBUG_DUMP "ASSIGNMENT DEBUG DUMP" OFF)
+IF(ASSIGNMENT_DEBUG_DUMP)
+	add_definitions(-DASSIGNMENT_DEBUG_DUMP)
+ENDIF(ASSIGNMENT_DEBUG_DUMP)
+
 target_link_libraries(assignment3
 	${LLVM_LINK_COMPONENTS}
 	)
