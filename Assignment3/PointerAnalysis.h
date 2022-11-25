@@ -16,11 +16,11 @@ using namespace llvm;
 typedef AllocaInst Object_t;
 typedef AllocaInst Pointer_t;
 
-inline static void assertIsPointer(Pointer_t *maybePointer) {
+static inline void assertIsPointer(Pointer_t *maybePointer) {
     assert(maybePointer->getType()->isPointerTy());
 }
 
-inline static bool isPointer(Pointer_t *maybePointer) {
+static inline bool isPointer(Pointer_t *maybePointer) {
     return maybePointer->getType()->isPointerTy();
 }
 
@@ -112,7 +112,63 @@ public:
 
     }
 
-    void transferInst(Instruction *inst, PointerAnalysisFact *inputDFVal) override {
+    static inline void transferFactReference(PointerAnalysisFact *fact,
+                               Pointer_t *LHS, Object_t *RHS) { // LHS = &RHS
+        assertIsPointer(LHS);
+
+        fact->clearPointToSet(LHS);
+        fact->addPointTo(LHS, RHS);
+    }
+
+    static inline void transferFactAssign(PointerAnalysisFact *fact,
+                            Pointer_t *LHS, Pointer_t *RHS) { // LHS = RHS
+        assertIsPointer(LHS);
+        assertIsPointer(RHS);
+
+        auto RHS_PTS = fact->getPointToSet(RHS);
+        fact->clearPointToSet(LHS);
+        fact->unionPointToSet(LHS, RHS_PTS);
+    }
+
+    static inline void transferFactLoad(PointerAnalysisFact *fact,
+                          Pointer_t *LHS, Pointer_t *RHS) { // LHS = *RHS
+        assertIsPointer(LHS);
+        assertIsPointer(RHS);
+
+        auto &RHS_PTS = fact->getPointToSet(RHS);
+        auto RHS_PTS_PTS = fact->getPointToSet(RHS_PTS);
+        fact->clearPointToSet(LHS);
+        fact->unionPointToSet(LHS, RHS_PTS_PTS);
+    }
+
+    static inline void transferFactStore(PointerAnalysisFact *fact,
+                           Pointer_t *LHS, Pointer_t *RHS) { // *LHS = RHS
+        assertIsPointer(LHS);
+        assertIsPointer(RHS);
+
+        auto &LHS_PTS = fact->getPointToSet(LHS);
+        switch (LHS_PTS.size()) {
+            case 0: {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                fprintf(stderr, "Uninitialized pointer store transfer unimplemented.\n");
+#endif
+                assert(false);
+                break;
+            }
+            case 1: {
+                Pointer_t *onlyPointee = *LHS_PTS.begin();
+                transferFactAssign(fact, onlyPointee, RHS);
+                break;
+            }
+            default: {
+                auto RHS_PTS = fact->getPointToSet(RHS);
+                fact->unionAllPointToSet(RHS_PTS);
+                break;
+            }
+        }
+    }
+
+    void transferInst(Instruction *inst, PointerAnalysisFact *fact) override {
         if (auto *allocaInst = dyn_cast<AllocaInst>(inst)) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
             fprintf(stderr, "\t- Process %s instruction:", "AllocaInst");

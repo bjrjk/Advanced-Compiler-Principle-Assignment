@@ -31,17 +31,17 @@ public:
     /// 
     /// @block the Basic Block
     /// @DFVal the input dataflow value
-    /// @isForward true to compute inputDFVal forward, otherwise backward
-    virtual void transferBasicBlock(BasicBlock *block, T *inputDFVal, bool isForward) {
+    /// @isForward true to compute fact forward, otherwise backward
+    virtual void transferBasicBlock(BasicBlock *block, T *fact, bool isForward) {
         if (isForward) {
             for (auto ii = block->begin(); ii != block->end(); ++ii) {
                 Instruction *inst = &*ii;
-                transferInst(inst, inputDFVal);
+                transferInst(inst, fact);
             }
         } else {
             for (auto rii = block->rbegin(); rii != block->rend(); ++rii) {
                 Instruction *inst = &*rii;
-                transferInst(inst, inputDFVal);
+                transferInst(inst, fact);
             }
         }
     }
@@ -52,7 +52,7 @@ public:
     /// @inst the Instruction
     /// @dfval the input dataflow value
     /// @return true if dfval changed
-    virtual void transferInst(Instruction *inst, T *inputDFVal) = 0;
+    virtual void transferInst(Instruction *inst, T *fact) = 0;
 
     ///
     /// Merge of two DFVals, dest will be the merged result
