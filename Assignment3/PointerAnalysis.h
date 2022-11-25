@@ -26,6 +26,8 @@ static inline bool isPointer(Pointer_t *maybePointer) {
 
 class PointerAnalysisFact {
 private:
+    std::set<Pointer_t *> pointerContainer;
+    std::set<Object_t *> objectContainer;
     std::map<Pointer_t *, std::set<Object_t *>> pointToSetContainer;
 public:
     PointerAnalysisFact() = default;
@@ -36,15 +38,42 @@ public:
         return pointToSetContainer == fact2.pointToSetContainer;
     }
 
+    inline bool addPointer(Pointer_t *pointer) {
+        assertIsPointer(pointer);
+        bool flag = false;
+
+        flag |= pointerContainer.insert(pointer).second;
+        flag |= objectContainer.insert(pointer).second;
+
+        return flag;
+    }
+
+    inline bool addObject(Object_t *object) {
+        return objectContainer.insert(object).second;
+    }
+
+    bool addObjectSet(const std::set<Object_t *> &objectSet) {
+        bool flag = false;
+        for_each(objectSet.begin(), objectSet.end(), [&](auto *object) {
+            flag |= addObject(object);
+        });
+        return flag;
+    }
+
     bool addPointTo(Pointer_t *pointer, Object_t *object) {
         // The `pointer` must be pointer type. However, the `object` can be either a pointer or value type.
         assertIsPointer(pointer);
+        addPointer(pointer);
+        addObject(object);
+
         return pointToSetContainer[pointer].insert(object).second;
         // Reference: https://zh.cppreference.com/w/cpp/container/set/insert
     }
 
     bool unionPointToSet(Pointer_t *pointer, const std::set<Object_t *> &externalObjectSet) {
         assertIsPointer(pointer);
+        addPointer(pointer);
+        addObjectSet(externalObjectSet);
 
         std::set<Object_t *> tmpUnionSet;
         auto &internalObjectSet = pointToSetContainer[pointer];
@@ -74,12 +103,12 @@ public:
         pointToSetContainer[pointer].clear();
     }
 
-    std::set<Pointer_t *> &&getPointerSet() const {
-        std::set<Pointer_t *> resultSet;
-        for (auto &PTSKeyPair: pointToSetContainer) {
-            resultSet.insert(PTSKeyPair.first);
-        }
-        return std::move(resultSet);
+    const std::set<Pointer_t *> &getPointerSet() const {
+        return pointerContainer;
+    }
+
+    const std::set<Object_t *> &getObjectSet() const {
+        return objectContainer;
     }
 
     const std::set<Object_t *> &getPointToSet(Pointer_t *pointer) {
@@ -106,6 +135,12 @@ public:
 
         return flag;
     }
+
+    void setTop() {
+        for (auto *pointer: pointerContainer) {
+            pointToSetContainer[pointer] = objectContainer;
+        }
+    }
 };
 
 inline raw_ostream &operator<<(raw_ostream &out, const PointerAnalysisFact &info) {
@@ -123,7 +158,7 @@ public:
     }
 
     static inline void transferFactReference(PointerAnalysisFact *fact,
-                               Pointer_t *LHS, Object_t *RHS) { // LHS = &RHS
+                                             Pointer_t *LHS, Object_t *RHS) { // LHS = &RHS
         assertIsPointer(LHS);
 
         fact->clearPointToSet(LHS);
@@ -131,7 +166,7 @@ public:
     }
 
     static inline void transferFactAssign(PointerAnalysisFact *fact,
-                            Pointer_t *LHS, Pointer_t *RHS) { // LHS = RHS
+                                          Pointer_t *LHS, Pointer_t *RHS) { // LHS = RHS
         assertIsPointer(LHS);
         assertIsPointer(RHS);
 
@@ -141,7 +176,7 @@ public:
     }
 
     static inline void transferFactLoad(PointerAnalysisFact *fact,
-                          Pointer_t *LHS, Pointer_t *RHS) { // LHS = *RHS
+                                        Pointer_t *LHS, Pointer_t *RHS) { // LHS = *RHS
         assertIsPointer(LHS);
         assertIsPointer(RHS);
 
@@ -152,17 +187,14 @@ public:
     }
 
     static inline void transferFactStore(PointerAnalysisFact *fact,
-                           Pointer_t *LHS, Pointer_t *RHS) { // *LHS = RHS
+                                         Pointer_t *LHS, Pointer_t *RHS) { // *LHS = RHS
         assertIsPointer(LHS);
         assertIsPointer(RHS);
 
         auto &LHS_PTS = fact->getPointToSet(LHS);
         switch (LHS_PTS.size()) {
             case 0: {
-#ifdef ASSIGNMENT_DEBUG_DUMP
-                fprintf(stderr, "Uninitialized pointer store transfer unimplemented.\n");
-#endif
-                assert(false);
+                fact->setTop();
                 break;
             }
             case 1: {
@@ -178,6 +210,10 @@ public:
         }
     }
 
+    void transferInstAlloca(AllocaInst *allocaInst, PointerAnalysisFact *fact) {
+
+    }
+
     void transferInst(Instruction *inst, PointerAnalysisFact *fact) override {
         if (auto *allocaInst = dyn_cast<AllocaInst>(inst)) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
@@ -185,6 +221,7 @@ public:
             inst->dump();
             fprintf(stderr, "\n");
 #endif
+            transferInstAlloca(allocaInst, fact);
         } else if (auto *storeInst = dyn_cast<StoreInst>(inst)) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
             fprintf(stderr, "\t- Process %s instruction:", "StoreInst");
