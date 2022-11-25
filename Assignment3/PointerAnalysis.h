@@ -217,22 +217,19 @@ public:
     void transferInst(Instruction *inst, PointerAnalysisFact *fact) override {
         if (auto *allocaInst = dyn_cast<AllocaInst>(inst)) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
-            fprintf(stderr, "\t- Process %s instruction:", "AllocaInst");
+            fprintf(stderr, "\t\t[*] Handle %s instruction:", "AllocaInst");
             inst->dump();
-            fprintf(stderr, "\n");
 #endif
             transferInstAlloca(allocaInst, fact);
         } else if (auto *storeInst = dyn_cast<StoreInst>(inst)) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
-            fprintf(stderr, "\t- Process %s instruction:", "StoreInst");
+            fprintf(stderr, "\t\t[*] Handle %s instruction:", "StoreInst");
             inst->dump();
-            fprintf(stderr, "\n");
 #endif
         } else if (auto *loadInst = dyn_cast<LoadInst>(inst)) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
-            fprintf(stderr, "\t- Process %s instruction:", "LoadInst");
+            fprintf(stderr, "\t\t[*] Handle %s instruction:", "LoadInst");
             inst->dump();
-            fprintf(stderr, "\n");
 #endif
         }
 
@@ -247,7 +244,12 @@ public:
     PointerAnalysis() : FunctionPass(ID) {}
 
     bool runOnFunction(Function &F) override {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+        fprintf(stderr, "[+] Analyzing Function %s, IR:\n", F.getName().data());
+        stderrCyanBackground();
         F.dump();
+        stderrNormalBackground();
+#endif
         PointerAnalysisVisitor visitor;
         DataflowResult<PointerAnalysisFact>::Type result;
         PointerAnalysisFact initVal;

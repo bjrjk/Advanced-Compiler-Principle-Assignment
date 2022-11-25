@@ -18,6 +18,8 @@
 #include <llvm/IR/CFG.h>
 #include <llvm/IR/Function.h>
 
+#include "debug.h"
+
 using namespace llvm;
 
 ///Base dataflow visitor class, defines the dataflow function
@@ -33,6 +35,12 @@ public:
     /// @DFVal the input dataflow value
     /// @isForward true to compute fact forward, otherwise backward
     virtual void transferBasicBlock(BasicBlock *block, T *fact, bool isForward) {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+        fprintf(stderr, "\t[+] Analyzing Basic Block %p, IR:\n", block);
+        stderrCyanBackground();
+        block->dump();
+        stderrNormalBackground();
+#endif
         if (isForward) {
             for (auto ii = block->begin(); ii != block->end(); ++ii) {
                 Instruction *inst = &*ii;
