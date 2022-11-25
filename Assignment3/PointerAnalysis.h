@@ -96,6 +96,16 @@ public:
         }
         return std::move(resultSet);
     }
+
+    bool unionFact(const PointerAnalysisFact &src) {
+        bool flag = false;
+
+        for (auto &externalPTSPair: src.pointToSetContainer) {
+            flag |= unionPointToSet(externalPTSPair.first, externalPTSPair.second);
+        }
+
+        return flag;
+    }
 };
 
 inline raw_ostream &operator<<(raw_ostream &out, const PointerAnalysisFact &info) {
@@ -109,7 +119,7 @@ public:
     PointerAnalysisVisitor() {}
 
     void merge(PointerAnalysisFact *dest, const PointerAnalysisFact &src) override {
-
+        dest->unionFact(src);
     }
 
     static inline void transferFactReference(PointerAnalysisFact *fact,
