@@ -13,15 +13,24 @@
 
 using namespace llvm;
 
-typedef AllocaInst Object_t;
-typedef AllocaInst Pointer_t;
+typedef Value Object_t;
+typedef Value Pointer_t;
 
-static inline void assertIsPointer(Pointer_t *maybePointer) {
-    assert(maybePointer->getType()->isPointerTy());
+static inline bool isObject(Object_t *maybeObject) {
+    return isa<AllocaInst>(maybeObject) || isa<Argument>(maybeObject);
 }
 
 static inline bool isPointer(Pointer_t *maybePointer) {
-    return maybePointer->getType()->isPointerTy();
+    return isObject(maybePointer) ||
+           isa<AllocaInst>(maybePointer) && maybePointer->getType()->isPointerTy();
+}
+
+static inline void assertIsObject(Object_t *maybeObject) {
+    assert(isObject(maybeObject));
+}
+
+static inline void assertIsPointer(Pointer_t *maybePointer) {
+    assert(isPointer(maybePointer));
 }
 
 class PointerAnalysisFact {
@@ -35,7 +44,9 @@ public:
     PointerAnalysisFact(const PointerAnalysisFact &info) = default;
 
     bool operator==(const PointerAnalysisFact &fact2) const {
-        return pointToSetContainer == fact2.pointToSetContainer;
+        return pointerContainer == fact2.pointerContainer &&
+               objectContainer == fact2.objectContainer &&
+               pointToSetContainer == fact2.pointToSetContainer;
     }
 
     inline bool addPointer(Pointer_t *pointer) {
@@ -43,13 +54,20 @@ public:
         bool flag = false;
 
         flag |= pointerContainer.insert(pointer).second;
-        flag |= objectContainer.insert(pointer).second;
+        flag |= objectContainer.insert(pointer).second; // A pointer is an object
 
         return flag;
     }
 
     inline bool addObject(Object_t *object) {
-        return objectContainer.insert(object).second;
+        assertIsObject(object);
+        bool flag = false;
+
+        flag |= objectContainer.insert(object).second;
+        flag |= pointerContainer.insert(object).second; // To process point-to relation, we treat object as pointer
+        flag |= pointToSetContainer[object].insert(object).second; // An object treated as pointer should point to itself
+
+        return flag;
     }
 
     bool addObjectSet(const std::set<Object_t *> &objectSet) {
@@ -62,7 +80,6 @@ public:
 
     bool addPointTo(Pointer_t *pointer, Object_t *object) {
         // The `pointer` must be pointer type. However, the `object` can be either a pointer or value type.
-        assertIsPointer(pointer);
         addPointer(pointer);
         addObject(object);
 
@@ -71,7 +88,6 @@ public:
     }
 
     bool unionPointToSet(Pointer_t *pointer, const std::set<Object_t *> &externalObjectSet) {
-        assertIsPointer(pointer);
         addPointer(pointer);
         addObjectSet(externalObjectSet);
 
@@ -98,7 +114,7 @@ public:
     }
 
     void clearPointToSet(Pointer_t *pointer) {
-        assertIsPointer(pointer);
+        addPointer(pointer);
 
         pointToSetContainer[pointer].clear();
     }
@@ -112,11 +128,11 @@ public:
     }
 
     const std::set<Object_t *> &getPointToSet(Pointer_t *pointer) {
-        assertIsPointer(pointer);
+        addPointer(pointer);
         return pointToSetContainer[pointer];
     }
 
-    std::set<Object_t *> &&getPointToSet(const std::set<Object_t *> &maybePointerSet) {
+    std::set<Object_t *> getPointToSet(const std::set<Object_t *> &maybePointerSet) {
         std::set<Object_t *> resultSet;
         for (auto *maybePointer: maybePointerSet) {
             if (!isPointer(maybePointer)) continue;
@@ -144,7 +160,6 @@ public:
 };
 
 inline raw_ostream &operator<<(raw_ostream &out, const PointerAnalysisFact &info) {
-
     return out;
 }
 
@@ -160,6 +175,7 @@ public:
     static inline void transferFactReference(PointerAnalysisFact *fact,
                                              Pointer_t *LHS, Object_t *RHS) { // LHS = &RHS
         assertIsPointer(LHS);
+        assertIsObject(RHS);
 
         fact->clearPointToSet(LHS);
         fact->addPointTo(LHS, RHS);
@@ -211,26 +227,73 @@ public:
     }
 
     void transferInstAlloca(AllocaInst *allocaInst, PointerAnalysisFact *fact) {
+        // Heap Abstraction: Allocation Site
+        if (allocaInst->getAllocatedType()->isPointerTy()) {
+            // Pointer Allocation
+#ifdef ASSIGNMENT_DEBUG_DUMP
+            fprintf(stderr, "\t\t\t[-] Pointer Allocation.\n");
+#endif
+            fact->addPointer(allocaInst);
+        } else {
+            // Object Allocation
+#ifdef ASSIGNMENT_DEBUG_DUMP
+            fprintf(stderr, "\t\t\t[-] Object Allocation.\n");
+#endif
+            fact->addObject(allocaInst);
+        }
+    }
+
+    void transferInstLoad(LoadInst *loadInst, PointerAnalysisFact *fact) {
+
+    }
+
+    void transferInstStore(StoreInst *storeInst, PointerAnalysisFact *fact) {
+        auto *LHS = storeInst->getPointerOperand();
+        auto *RHS = storeInst->getValueOperand();
+        if (auto *argRHS = dyn_cast<Argument>(RHS)) {
+            // Handle pointer-to relation of function argument
+#ifdef INTRA_PROCEDURE_ANALYSIS
+#ifdef ASSIGNMENT_DEBUG_DUMP
+            fprintf(stderr, "\t\t\t[-] INTRA_PROCEDURE_ANALYSIS: Handle pointer-to relation of function argument: transferFactStore %s <- %s.\n",
+                    LHS->getName().data(), argRHS->getName().data());
+#endif
+            transferFactStore(fact, LHS, argRHS);
+#else // INTER_PROCEDURE_ANALYSIS
+            fprintf(stderr, "Inter-procedure analysis unimplemented!\n");
+            assert(false);
+#endif
+        }
+    }
+
+    void transferInstGetElemPtr(GetElementPtrInst *getElemPtrInst, PointerAnalysisFact *fact) {
 
     }
 
     void transferInst(Instruction *inst, PointerAnalysisFact *fact) override {
         if (auto *allocaInst = dyn_cast<AllocaInst>(inst)) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
-            fprintf(stderr, "\t\t[*] Handle %s instruction:", "AllocaInst");
+            fprintf(stderr, "\t\t[*] Handle %s instruction %p:", "AllocaInst", allocaInst);
             inst->dump();
 #endif
             transferInstAlloca(allocaInst, fact);
         } else if (auto *storeInst = dyn_cast<StoreInst>(inst)) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
-            fprintf(stderr, "\t\t[*] Handle %s instruction:", "StoreInst");
+            fprintf(stderr, "\t\t[*] Handle %s instruction %p:", "StoreInst", storeInst);
             inst->dump();
 #endif
+            transferInstStore(storeInst, fact);
         } else if (auto *loadInst = dyn_cast<LoadInst>(inst)) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
-            fprintf(stderr, "\t\t[*] Handle %s instruction:", "LoadInst");
+            fprintf(stderr, "\t\t[*] Handle %s instruction %p:", "LoadInst", loadInst);
             inst->dump();
 #endif
+
+        } else if (auto *getElemPtrInst = dyn_cast<GetElementPtrInst>(inst)) {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+            fprintf(stderr, "\t\t[*] Handle %s instruction %p:", "GetElementPtrInst", getElemPtrInst);
+            inst->dump();
+#endif
+
         }
 
     }
@@ -245,7 +308,7 @@ public:
 
     bool runOnFunction(Function &F) override {
 #ifdef ASSIGNMENT_DEBUG_DUMP
-        fprintf(stderr, "[+] Analyzing Function %s, IR:\n", F.getName().data());
+        fprintf(stderr, "[+] Analyzing Function %s %p, IR:\n", F.getName().data(), &F);
         stderrCyanBackground();
         F.dump();
         stderrNormalBackground();
