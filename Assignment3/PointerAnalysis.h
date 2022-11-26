@@ -17,12 +17,12 @@ typedef Value Object_t;
 typedef Value Pointer_t;
 
 static inline bool isObject(Object_t *maybeObject) {
-    return isa<AllocaInst>(maybeObject) || isa<Argument>(maybeObject);
+    return isa<Instruction>(maybeObject) || isa<Argument>(maybeObject) || isa<Function>(maybeObject);
 }
 
 static inline bool isPointer(Pointer_t *maybePointer) {
-    return isObject(maybePointer) ||
-           isa<AllocaInst>(maybePointer) && maybePointer->getType()->isPointerTy();
+    return isObject(maybePointer) || maybePointer->getType()->isPointerTy() &&
+                                     (isa<Instruction>(maybePointer) || isa<Function>(maybePointer));
 }
 
 static inline void assertIsObject(Object_t *maybeObject) {
@@ -65,7 +65,8 @@ public:
 
         flag |= objectContainer.insert(object).second;
         flag |= pointerContainer.insert(object).second; // To process point-to relation, we treat object as pointer
-        flag |= pointToSetContainer[object].insert(object).second; // An object treated as pointer should point to itself
+        flag |= pointToSetContainer[object].insert(
+                object).second; // An object treated as pointer should point to itself
 
         return flag;
     }
@@ -244,7 +245,14 @@ public:
     }
 
     void transferInstLoad(LoadInst *loadInst, PointerAnalysisFact *fact) {
-
+        auto *LHS = loadInst;
+        auto *RHS = loadInst->getPointerOperand();
+#ifdef ASSIGNMENT_DEBUG_DUMP
+        fprintf(stderr,
+                "\t\t\t[-] Transfer Fact of Load Operation: %s <- %s.\n",
+                LHS->getName().data(), RHS->getName().data());
+#endif
+        transferFactLoad(fact, LHS, RHS);
     }
 
     void transferInstStore(StoreInst *storeInst, PointerAnalysisFact *fact) {
@@ -254,7 +262,8 @@ public:
             // Handle pointer-to relation of function argument
 #ifdef INTRA_PROCEDURE_ANALYSIS
 #ifdef ASSIGNMENT_DEBUG_DUMP
-            fprintf(stderr, "\t\t\t[-] INTRA_PROCEDURE_ANALYSIS: Handle pointer-to relation of function argument: transferFactStore %s <- %s.\n",
+            fprintf(stderr,
+                    "\t\t\t[-] Transfer Fact of Store Operation (Function Argument Handling, INTRA_PROCEDURE_ANALYSIS): %s <- %s.\n",
                     LHS->getName().data(), argRHS->getName().data());
 #endif
             transferFactStore(fact, LHS, argRHS);
@@ -262,6 +271,12 @@ public:
             fprintf(stderr, "Inter-procedure analysis unimplemented!\n");
             assert(false);
 #endif
+        } else {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+            fprintf(stderr, "\t\t\t[-] Transfer Fact of Store Operation (Normal Variable): %s <- %s.\n",
+                    LHS->getName().data(), RHS->getName().data());
+#endif
+            transferFactStore(fact, LHS, RHS);
         }
     }
 
@@ -287,13 +302,13 @@ public:
             fprintf(stderr, "\t\t[*] Handle %s instruction %p:", "LoadInst", loadInst);
             inst->dump();
 #endif
-
+            transferInstLoad(loadInst, fact);
         } else if (auto *getElemPtrInst = dyn_cast<GetElementPtrInst>(inst)) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
             fprintf(stderr, "\t\t[*] Handle %s instruction %p:", "GetElementPtrInst", getElemPtrInst);
             inst->dump();
 #endif
-
+            transferInstGetElemPtr(getElemPtrInst, fact);
         }
 
     }
