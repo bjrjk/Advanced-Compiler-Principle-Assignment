@@ -79,8 +79,10 @@ struct DataflowFactPair {
     T output;
 
     DataflowFactPair() {}
+
     DataflowFactPair(const T &input, const T &output) : input(input), output(output) {}
-    bool operator == (const DataflowFactPair<T> &fp2) const {
+
+    bool operator==(const DataflowFactPair<T> &fp2) const {
         return this->input == fp2.input && this->output == fp2.output;
     }
 };
@@ -204,17 +206,39 @@ void analyzeBackward(Function *fn,
 template<class T>
 void printDataflowResult(raw_ostream &out,
                          const typename DataflowResult<T>::Type &DFResult) {
+    char buf[1024]; // Warning: Buffer Overflow
+
+    sprintf(buf, "[*] Dataflow Result Dump for %p:\n", &DFResult);
+    out << buf;
     for (typename DataflowResult<T>::Type::const_iterator it = DFResult.begin(); it != DFResult.end(); ++it) {
+        sprintf(buf, "\t[*] Basic Block Fact Dump for %p:\n", it->first);
+        out << buf;
+
+        stderrCyanBackground();
         if (it->first == NULL) out << "*";
         else it->first->dump();
 
-        out << "\n\tInput Fact: "
+        stderrRedFontYellowBackground();
+        out << "\n\t[*] Input Fact: \n"
             << it->second.input
-            << "\n\tOutput Fact: "
+            << "\n\t[*] Output Fact: \n"
             << it->second.output
             << "\n";
+        stderrNormalBackground();
     }
 }
 
+template<class T>
+void printDataflowFact(raw_ostream &out,
+                       const T &factResult) {
+    char buf[1024]; // Warning: Buffer Overflow
+
+    sprintf(buf, "[*] Fact Dump for %p (Single):\n", &factResult);
+    out << buf;
+
+    stderrRedFontYellowBackground();
+    out << factResult << "\n";
+    stderrNormalBackground();
+}
 
 #endif /* !_DATAFLOW_H_ */
