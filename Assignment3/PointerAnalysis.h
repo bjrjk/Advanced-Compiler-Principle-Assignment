@@ -316,6 +316,31 @@ public:
         }
     }
 
+    static inline void transferFactReferenceStore(PointerAnalysisFact *fact,
+                                             Pointer_t *LHS, Pointer_t *RHS) { // *LHS = &RHS
+        assertIsPointer(LHS);
+        assertIsPointer(RHS);
+
+        auto &LHS_PTS = fact->getPointToSet(LHS);
+        switch (LHS_PTS.size()) {
+            case 0: {
+                fact->setTop();
+                break;
+            }
+            case 1: {
+                Pointer_t *onlyPointee = *LHS_PTS.begin();
+                transferFactReference(fact, onlyPointee, RHS);
+                break;
+            }
+            default: {
+                std::set<Pointer_t *> RHS_PTS;
+                RHS_PTS.insert(RHS);
+                fact->unionAllPointToSet(RHS_PTS);
+                break;
+            }
+        }
+    }
+
     static Instruction *createNewInst(Value *parent, const Twine &name) {
         Instruction *inst = new AllocaInst(IntegerType::get(parent->getContext(), 32), 0);
         inst->setName(name);
@@ -403,6 +428,14 @@ public:
             fprintf(stderr, "Inter-procedure analysis unimplemented!\n");
             assert(false);
 #endif
+        } else if (auto *allocaRHS = dyn_cast<AllocaInst>(RHS)) {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+            fprintf(stderr,
+                    "\t\t\t[-] Transfer Fact of Store Operation (Alloca Address Assign, ReferenceStore): %s(%p) <- %s(%p).\n",
+                    LHS->getName().data(), LHS, RHS->getName().data(), RHS);
+#endif
+            // Handle alloca address reference store
+            transferFactReferenceStore(fact, LHS, allocaRHS);
         } else if (fact->trySetPointerInitialized(LHS)) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
             fprintf(stderr,
