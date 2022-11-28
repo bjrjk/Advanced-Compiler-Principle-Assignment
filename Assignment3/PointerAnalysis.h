@@ -291,15 +291,40 @@ public:
         }
     }
 
+    static inline void transferFactLoadStore(PointerAnalysisFact *fact,
+                                         Pointer_t *LHS, Pointer_t *RHS) { // *LHS = *RHS (memcpy)
+        assertIsPointer(LHS);
+        assertIsPointer(RHS);
+
+        auto &LHS_PTS = fact->getPointToSet(LHS);
+        switch (LHS_PTS.size()) {
+            case 0: {
+                fact->setTop();
+                break;
+            }
+            case 1: {
+                Pointer_t *onlyPointee = *LHS_PTS.begin();
+                transferFactLoad(fact, onlyPointee, RHS);
+                break;
+            }
+            default: {
+                auto RHS_PTS = fact->getPointToSet(RHS);
+                auto RHS_PTS_PTS = fact->getPointToSet(RHS_PTS);
+                fact->unionAllPointToSet(RHS_PTS_PTS);
+                break;
+            }
+        }
+    }
+
     static Instruction *createNewInst(Value *parent, const Twine &name) {
-        Instruction *field = new AllocaInst(IntegerType::get(parent->getContext(), 32), 0);
-        field->setName(name);
-        return field;
+        Instruction *inst = new AllocaInst(IntegerType::get(parent->getContext(), 32), 0);
+        inst->setName(name);
+        return inst;
     }
 
     static Instruction *createStructField(Value *parent) {
         // Add unified field object
-        return createNewInst(parent, parent->getName() + ".field");
+        return createNewInst(parent, parent->getName() + "._");
     }
 
     void transferInstAlloca(AllocaInst *allocaInst, PointerAnalysisFact *fact) {
@@ -365,7 +390,7 @@ public:
                 Value *parent = argRHS;
                 while (curType->isPointerTy()) {
                     curType = curType->getPointerElementType();
-                    Instruction *mockObject = createNewInst(parent, parent->getName() + ".mock");
+                    Instruction *mockObject = createNewInst(parent, parent->getName() + ".mk");
                     fact->addObject(mockObject);
                     transferFactReference(fact, parent, mockObject);
                     parent = mockObject;
@@ -433,10 +458,10 @@ public:
             // TODO: Implement copy semantic
 #ifdef ASSIGNMENT_DEBUG_DUMP
             fprintf(stderr,
-                    "\t\t\t[-] Transfer Fact of llvm.memcpy(Assign) Operation: %s(%p) <- %s(%p).\n",
+                    "\t\t\t[-] Transfer Fact of llvm.memcpy(LoadStore) Operation: %s(%p) <- %s(%p).\n",
                     LHS->getName().data(), LHS, RHS->getName().data(), RHS);
 #endif
-            transferFactAssign(fact, LHS, RHS);
+            transferFactLoadStore(fact, LHS, RHS);
         }
     }
 
