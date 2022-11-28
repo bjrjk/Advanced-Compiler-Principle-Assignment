@@ -40,6 +40,7 @@ private:
     std::set<Object_t *> objectContainer;
     std::map<Pointer_t *, std::set<Object_t *>> pointToSetContainer;
     std::set<Pointer_t *> initializedPointerContainer;
+    std::map<Pointer_t *, Pointer_t *> structToFieldMapper, fieldToStructMapper;
 public:
     PointerAnalysisFact() = default;
 
@@ -160,6 +161,26 @@ public:
     bool unionFact(const PointerAnalysisFact &src) {
         bool flag = false;
 
+        pointerContainer.insert(
+                src.pointerContainer.begin(),
+                src.pointerContainer.end()
+        );
+        objectContainer.insert(
+                src.objectContainer.begin(),
+                src.objectContainer.end()
+        );
+        initializedPointerContainer.insert(
+                src.initializedPointerContainer.begin(),
+                src.initializedPointerContainer.end()
+        );
+        structToFieldMapper.insert(
+                src.structToFieldMapper.begin(),
+                src.structToFieldMapper.end()
+        );
+        fieldToStructMapper.insert(
+                src.fieldToStructMapper.begin(),
+                src.fieldToStructMapper.end()
+        );
         for (auto &externalPTSPair: src.pointToSetContainer) {
             flag |= unionPointToSet(externalPTSPair.first, externalPTSPair.second);
         }
@@ -182,6 +203,64 @@ public:
             return true;
         }
         return false;
+    }
+
+    bool isStruct(Pointer_t *maybeStructPtr) const {
+        return structToFieldMapper.count(maybeStructPtr);
+    }
+
+    bool isField(Pointer_t *maybeFieldPtr) const {
+        return fieldToStructMapper.count(maybeFieldPtr);
+    }
+
+    bool isAllStruct(const std::set<Pointer_t *> &maybeStructPtrSet) {
+        bool flag = true;
+        for (auto *maybeStructPtr: maybeStructPtrSet) {
+            flag &= isStruct(maybeStructPtr);
+        }
+        return flag;
+    }
+
+    bool isAllField(const std::set<Pointer_t *> &maybeFieldPtrSet) {
+        bool flag = true;
+        for (auto *maybeFieldPtr: maybeFieldPtrSet) {
+            flag &= isField(maybeFieldPtr);
+        }
+        return flag;
+    }
+
+    bool isAllNonStruct(const std::set<Pointer_t *> &maybeNonStructPtrSet) {
+        bool flag = true;
+        for (auto *maybeNonStructPtr: maybeNonStructPtrSet) {
+            flag &= !isStruct(maybeNonStructPtr);
+        }
+        return flag;
+    }
+
+    Pointer_t *getStructField(Pointer_t *structPtr) const {
+        assert(structToFieldMapper.count(structPtr) > 0);
+        return structToFieldMapper.find(structPtr)->second;
+    }
+
+    std::set<Pointer_t *> getAllStructField(const std::set<Pointer_t *> &structPtrSet) const {
+        std::set<Object_t *> toUnionSet;
+        for (auto *object: structPtrSet) {
+            auto *RHSField = getStructField(object);
+            toUnionSet.insert(RHSField);
+        }
+        return toUnionSet;
+    }
+
+    bool setStructField(Pointer_t *structPtr, Pointer_t *fieldPtr) {
+        if (structToFieldMapper.count(structPtr) == 0) {
+            structToFieldMapper[structPtr] = fieldPtr;
+            fieldToStructMapper[fieldPtr] = structPtr;
+            return true;
+        } else {
+            assert(structToFieldMapper[structPtr] == fieldPtr);
+            assert(fieldToStructMapper[fieldPtr] = structPtr);
+            return false;
+        }
     }
 };
 
@@ -291,8 +370,8 @@ public:
         }
     }
 
-    static inline void transferFactLoadStore(PointerAnalysisFact *fact,
-                                         Pointer_t *LHS, Pointer_t *RHS) { // *LHS = *RHS (memcpy)
+    static inline void transferFactLoadStoreField(PointerAnalysisFact *fact,
+                                                  Pointer_t *LHS, Pointer_t *RHS) { // *LHS = *RHS (memcpy)
         assertIsPointer(LHS);
         assertIsPointer(RHS);
 
@@ -316,8 +395,34 @@ public:
         }
     }
 
+    static inline void transferFactLoadStoreStruct(PointerAnalysisFact *fact,
+                                                   Pointer_t *LHS,
+                                                   Pointer_t *RHS) { // *LHS._ = *RHS (memcpy) (*LHS is object)
+        assertIsPointer(LHS);
+        assertIsPointer(RHS);
+
+        auto LHS_PTS_Field = fact->getAllStructField(fact->getPointToSet(LHS));
+        switch (LHS_PTS_Field.size()) {
+            case 0: {
+                fact->setTop();
+                break;
+            }
+            case 1: {
+                Pointer_t *onlyPointee = *LHS_PTS_Field.begin();
+                transferFactLoad(fact, onlyPointee, RHS);
+                break;
+            }
+            default: {
+                auto RHS_PTS = fact->getPointToSet(RHS);
+                auto RHS_PTS_PTS = fact->getPointToSet(RHS_PTS);
+                fact->unionAllPointToSet(RHS_PTS_PTS);
+                break;
+            }
+        }
+    }
+
     static inline void transferFactReferenceStore(PointerAnalysisFact *fact,
-                                             Pointer_t *LHS, Pointer_t *RHS) { // *LHS = &RHS
+                                                  Pointer_t *LHS, Pointer_t *RHS) { // *LHS = &RHS
         assertIsPointer(LHS);
         assertIsPointer(RHS);
 
@@ -341,6 +446,30 @@ public:
         }
     }
 
+    static inline void transferFactFieldReference(PointerAnalysisFact *fact,
+                                                  Pointer_t *LHS,
+                                                  Pointer_t *RHS) { // LHS = &RHS.field (RHS is a struct)
+        auto *RHSField = fact->getStructField(RHS);
+        fact->clearPointToSet(LHS);
+        fact->addPointTo(LHS, RHSField);
+    }
+
+    static inline void transferFactFieldAssign(PointerAnalysisFact *fact,
+                                               Pointer_t *LHS,
+                                               Pointer_t *RHS) { // LHS = RHS.field (RHS point to a struct)
+        auto toUnionSet = fact->getAllStructField(fact->getPointToSet(RHS));
+        fact->clearPointToSet(LHS);
+        fact->unionPointToSet(LHS, toUnionSet);
+    }
+
+    static inline void transferFactFieldLoad(PointerAnalysisFact *fact,
+                                             Pointer_t *LHS,
+                                             Pointer_t *RHS) { // LHS = (*RHS).field (RHS point to pointers of struct)
+        auto toUnionSet = fact->getAllStructField(fact->getPointToSet(fact->getPointToSet(RHS)));
+        fact->clearPointToSet(LHS);
+        fact->unionPointToSet(LHS, toUnionSet);
+    }
+
     static Instruction *createNewInst(Value *parent, const Twine &name) {
         Instruction *inst = new AllocaInst(IntegerType::get(parent->getContext(), 32), 0);
         inst->setName(name);
@@ -350,6 +479,35 @@ public:
     static Instruction *createStructField(Value *parent) {
         // Add unified field object
         return createNewInst(parent, parent->getName() + "._");
+    }
+
+    static void mockStruct(Value *maybeMockPointer, PointerAnalysisFact *fact, Type *type) {
+        Type *rootType = [=]() {
+            Type *curType = type;
+            while (curType->isPointerTy())
+                curType = curType->getPointerElementType();
+            return curType;
+        }();
+
+        if (rootType->isStructTy()) {
+            Type *curType = type;
+            Value *parent = maybeMockPointer;
+            while (curType->isPointerTy()) {
+                curType = curType->getPointerElementType();
+                Instruction *mockObject = createNewInst(parent, parent->getName() + ".mk");
+                fact->addObject(mockObject);
+                transferFactReference(fact, parent, mockObject);
+                parent = mockObject;
+            }
+            Instruction *field = createStructField(parent);
+            fact->addObject(field);
+            transferFactReference(fact, parent, field);
+            fact->setStructField(parent, field);
+        }
+    }
+
+    static void mockStruct(Value *maybeMockPointer, PointerAnalysisFact *fact) {
+        mockStruct(maybeMockPointer, fact, maybeMockPointer->getType());
     }
 
     void transferInstAlloca(AllocaInst *allocaInst, PointerAnalysisFact *fact) {
@@ -365,9 +523,7 @@ public:
             fprintf(stderr, "\t\t\t[-] Struct Allocation.\n");
 #endif
             fact->addObject(allocaInst);
-            Instruction *field = createStructField(allocaInst);
-            fact->addObject(field);
-            transferFactReference(fact, allocaInst, field);
+            mockStruct(allocaInst, fact, allocaInst->getAllocatedType());
         } else {
             // Object Allocation
 #ifdef ASSIGNMENT_DEBUG_DUMP
@@ -380,12 +536,21 @@ public:
     void transferInstLoad(LoadInst *loadInst, PointerAnalysisFact *fact) {
         auto *LHS = loadInst;
         auto *RHS = loadInst->getPointerOperand();
+        if (isa<AllocaInst>(RHS)) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
-        fprintf(stderr,
-                "\t\t\t[-] Transfer Fact of Load Operation: %s(%p) <- %s(%p).\n",
-                LHS->getName().data(), LHS, RHS->getName().data(), RHS);
+            fprintf(stderr,
+                    "\t\t\t[-] Transfer Fact of Load Operation (Alloca Load, Assign): %s(%p) <- %s(%p).\n",
+                    LHS->getName().data(), LHS, RHS->getName().data(), RHS);
 #endif
-        transferFactLoad(fact, LHS, RHS);
+            transferFactAssign(fact, LHS, RHS);
+        } else {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+            fprintf(stderr,
+                    "\t\t\t[-] Transfer Fact of Load Operation (Normal Load): %s(%p) <- %s(%p).\n",
+                    LHS->getName().data(), LHS, RHS->getName().data(), RHS);
+#endif
+            transferFactLoad(fact, LHS, RHS);
+        }
     }
 
     void transferInstStore(StoreInst *storeInst, PointerAnalysisFact *fact) {
@@ -403,27 +568,7 @@ public:
             transferFactReference(fact, LHS, argRHS);
 
             // Mock for structure
-            Type *rootType = [=]() {
-                Type *curType = argRHS->getType();
-                while (curType->isPointerTy())
-                    curType = curType->getPointerElementType();
-                return curType;
-            }();
-
-            if (rootType->isStructTy()) {
-                Type *curType = argRHS->getType();
-                Value *parent = argRHS;
-                while (curType->isPointerTy()) {
-                    curType = curType->getPointerElementType();
-                    Instruction *mockObject = createNewInst(parent, parent->getName() + ".mk");
-                    fact->addObject(mockObject);
-                    transferFactReference(fact, parent, mockObject);
-                    parent = mockObject;
-                }
-                Instruction *field = createStructField(parent);
-                fact->addObject(field);
-                transferFactReference(fact, parent, field);
-            }
+            mockStruct(argRHS, fact);
 #else // INTER_PROCEDURE_ANALYSIS
             fprintf(stderr, "Inter-procedure analysis unimplemented!\n");
             assert(false);
@@ -455,26 +600,66 @@ public:
 
     void transferInstGetElemPtr(GetElementPtrInst *getElemPtrInst, PointerAnalysisFact *fact) {
         // `getelementptr %struct, src` is computing an address of structure's data field
-        // As the analysis is field-insensitive, Equivalent to Assign Fact transfer
         auto *LHS = getElemPtrInst;
         auto *RHS = getElemPtrInst->getPointerOperand();
+        if (LHS->getSourceElementType()->isStructTy()) {
+            if (isa<AllocaInst>(RHS)) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
-        fprintf(stderr,
-                "\t\t\t[-] Transfer Fact of GetElementPtr(Assign) Operation: %s(%p) <- %s(%p).\n",
-                LHS->getName().data(), LHS, RHS->getName().data(), RHS);
+                fprintf(stderr,
+                        "\t\t\t[-] Transfer Fact of GetElementPtr(Struct Alloca, FieldReference) Operation: %s(%p) <- %s(%p).\n",
+                        LHS->getName().data(), LHS, RHS->getName().data(), RHS);
 #endif
-        transferFactAssign(fact, LHS, RHS);
+                transferFactFieldReference(fact, LHS, RHS);
+            } else {
+                auto &RHS_PTS = fact->getPointToSet(RHS);
+                bool allStruct = fact->isAllStruct(RHS_PTS);
+                bool allNonStruct = fact->isAllNonStruct(RHS_PTS);
+                assert(allStruct ^ allNonStruct);
+                if (allStruct) {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                    fprintf(stderr,
+                            "\t\t\t[-] Transfer Fact of GetElementPtr(Struct TempReg, FieldAssign) Operation: %s(%p) <- %s(%p).\n",
+                            LHS->getName().data(), LHS, RHS->getName().data(), RHS);
+#endif
+                    transferFactFieldAssign(fact, LHS, RHS);
+                } else if (allNonStruct) {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                    fprintf(stderr,
+                            "\t\t\t[-] Transfer Fact of GetElementPtr(Struct TempReg, FieldLoad) Operation: %s(%p) <- %s(%p).\n",
+                            LHS->getName().data(), LHS, RHS->getName().data(), RHS);
+#endif
+                    transferFactFieldLoad(fact, LHS, RHS);
+                } else {
+                    assert(false);
+                }
+            }
+        } else {
+            assert(false);
+        }
     }
 
     void transferInstBitCast(BitCastInst *bitCastInst, PointerAnalysisFact *fact) {
         auto *LHS = bitCastInst;
         auto *RHS = bitCastInst->getOperand(0);
+
+        if (auto *callBase = dyn_cast<CallBase>(RHS)) {
+            if (callBase->getCalledOperand()->getName().equals("malloc")) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
-        fprintf(stderr,
-                "\t\t\t[-] Transfer Fact of BitCast(Assign) Operation: %s(%p) <- %s(%p).\n",
-                LHS->getName().data(), LHS, RHS->getName().data(), RHS);
+                fprintf(stderr,
+                        "\t\t\t[-] Transfer Fact of BitCast(malloc) Operation: %s(%p) <- %s(%p).\n",
+                        LHS->getName().data(), LHS, RHS->getName().data(), RHS);
 #endif
-        transferFactAssign(fact, LHS, RHS);
+                // Handle malloc mock
+                mockStruct(LHS, fact);
+            }
+        } else {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+            fprintf(stderr,
+                    "\t\t\t[-] Transfer Fact of BitCast(Assign) Operation: %s(%p) <- %s(%p).\n",
+                    LHS->getName().data(), LHS, RHS->getName().data(), RHS);
+#endif
+            transferFactAssign(fact, LHS, RHS);
+        }
     }
 
     void transferInstCall(CallBase *callInst, PointerAnalysisFact *fact) {
@@ -489,12 +674,24 @@ public:
             auto *LHS = callInst->getOperand(0);
             auto *RHS = callInst->getOperand(1);
             // TODO: Implement copy semantic
+            auto &LHS_PTS = fact->getPointToSet(LHS);
+            if (fact->isAllStruct(LHS_PTS)) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
-            fprintf(stderr,
-                    "\t\t\t[-] Transfer Fact of llvm.memcpy(LoadStore) Operation: %s(%p) <- %s(%p).\n",
-                    LHS->getName().data(), LHS, RHS->getName().data(), RHS);
+                fprintf(stderr,
+                        "\t\t\t[-] Transfer Fact of llvm.memcpy(LoadStoreStruct) Operation: %s(%p) <- %s(%p).\n",
+                        LHS->getName().data(), LHS, RHS->getName().data(), RHS);
 #endif
-            transferFactLoadStore(fact, LHS, RHS);
+                transferFactLoadStoreStruct(fact, LHS, RHS);
+            } else if (fact->isAllField(LHS_PTS)) {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                fprintf(stderr,
+                        "\t\t\t[-] Transfer Fact of llvm.memcpy(LoadStoreField) Operation: %s(%p) <- %s(%p).\n",
+                        LHS->getName().data(), LHS, RHS->getName().data(), RHS);
+#endif
+                transferFactLoadStoreField(fact, LHS, RHS);
+            } else {
+                assert(false);
+            }
         }
     }
 
