@@ -470,15 +470,15 @@ public:
         fact->unionPointToSet(LHS, toUnionSet);
     }
 
-    static Instruction *createNewInst(Value *parent, const Twine &name) {
-        Instruction *inst = new AllocaInst(IntegerType::get(parent->getContext(), 32), 0);
+    static Instruction *createNewInst(const Twine &name, Type *type) {
+        Instruction *inst = new AllocaInst(type, 0);
         inst->setName(name);
         return inst;
     }
 
     static Instruction *createStructField(Value *parent) {
-        // Add unified field object
-        return createNewInst(parent, parent->getName() + "._");
+        // Create a unified field object, represented as i8 *
+        return createNewInst(parent->getName() + "._", PointerType::get(IntegerType::get(parent->getContext(), 8), 0));
     }
 
     static void mockStruct(Value *maybeMockPointer, PointerAnalysisFact *fact, Type *type) {
@@ -494,7 +494,7 @@ public:
             Value *parent = maybeMockPointer;
             while (curType->isPointerTy()) {
                 curType = curType->getPointerElementType();
-                Instruction *mockObject = createNewInst(parent, parent->getName() + ".mk");
+                Instruction *mockObject = createNewInst(parent->getName() + ".mk", curType);
                 fact->addObject(mockObject);
                 transferFactReference(fact, parent, mockObject);
                 parent = mockObject;
