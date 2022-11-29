@@ -23,7 +23,8 @@ static inline bool isObject(Object_t *maybeObject) {
 
 static inline bool isPointer(Pointer_t *maybePointer) {
     return isObject(maybePointer) || maybePointer->getType()->isPointerTy() &&
-                                     (isa<Instruction>(maybePointer) || isa<Function>(maybePointer));
+                                     (isa<Instruction>(maybePointer) || isa<Function>(maybePointer) ||
+                                      isa<ConstantPointerNull>(maybePointer));
 }
 
 static inline void assertIsObject(Object_t *maybeObject) {
@@ -573,22 +574,40 @@ public:
             fprintf(stderr, "Inter-procedure analysis unimplemented!\n");
             assert(false);
 #endif
+        } else if (isa<AllocaInst>(LHS) && isa<AllocaInst>(RHS)) {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+            fprintf(stderr,
+                    "\t\t\t[-] Transfer Fact of Store Operation (Unimplemented): %s(%p) <- %s(%p).\n",
+                    LHS->getName().data(), LHS, RHS->getName().data(), RHS);
+#endif
+            assert(false);
         } else if (auto *allocaRHS = dyn_cast<AllocaInst>(RHS)) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
             fprintf(stderr,
-                    "\t\t\t[-] Transfer Fact of Store Operation (Alloca Address Assign, ReferenceStore): %s(%p) <- %s(%p).\n",
+                    "\t\t\t[-] Transfer Fact of Store Operation (Alloca Address Store, ReferenceStore): %s(%p) <- %s(%p).\n",
                     LHS->getName().data(), LHS, RHS->getName().data(), RHS);
 #endif
             // Handle alloca address reference store
             transferFactReferenceStore(fact, LHS, allocaRHS);
-        } else if (fact->trySetPointerInitialized(LHS)) {
+        } else if (auto *allocaLHS = dyn_cast<AllocaInst>(LHS)) { // fact->trySetPointerInitialized(LHS)
+            if (!isa<ConstantPointerNull>(RHS)) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
-            fprintf(stderr,
-                    "\t\t\t[-] Transfer Fact of Store Operation (Pointer Initialize, Assign): %s(%p) <- %s(%p).\n",
-                    LHS->getName().data(), LHS, RHS->getName().data(), RHS);
+                fprintf(stderr,
+                        "\t\t\t[-] Transfer Fact of Store Operation (Assign to Alloca Address, Assign): %s(%p) <- %s(%p).\n",
+                        LHS->getName().data(), LHS, RHS->getName().data(), RHS);
 #endif
-            // Handle pointer initialize
-            transferFactAssign(fact, LHS, RHS);
+                // Handle pointer assign
+                transferFactAssign(fact, allocaLHS, RHS);
+            } else {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                fprintf(stderr,
+                        "\t\t\t[-] Transfer Fact of Store Operation (NullPtr Assign to Alloca Address, Clear): %s(%p).\n",
+                        LHS->getName().data(), LHS);
+#endif
+                // Handle pointer assign
+                fact->clearPointToSet(allocaLHS);
+            }
+
         } else {
 #ifdef ASSIGNMENT_DEBUG_DUMP
             fprintf(stderr, "\t\t\t[-] Transfer Fact of Store Operation (Normal Variable, Store): %s(%p) <- %s(%p).\n",
