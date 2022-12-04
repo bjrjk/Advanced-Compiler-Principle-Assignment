@@ -163,24 +163,24 @@ public:
         bool flag = false;
 
         pointerContainer.insert(
-                src.pointerContainer.begin(),
-                src.pointerContainer.end()
+            src.pointerContainer.begin(),
+            src.pointerContainer.end()
         );
         objectContainer.insert(
-                src.objectContainer.begin(),
-                src.objectContainer.end()
+            src.objectContainer.begin(),
+            src.objectContainer.end()
         );
         initializedPointerContainer.insert(
-                src.initializedPointerContainer.begin(),
-                src.initializedPointerContainer.end()
+            src.initializedPointerContainer.begin(),
+            src.initializedPointerContainer.end()
         );
         structToFieldMapper.insert(
-                src.structToFieldMapper.begin(),
-                src.structToFieldMapper.end()
+            src.structToFieldMapper.begin(),
+            src.structToFieldMapper.end()
         );
         fieldToStructMapper.insert(
-                src.fieldToStructMapper.begin(),
-                src.fieldToStructMapper.end()
+            src.fieldToStructMapper.begin(),
+            src.fieldToStructMapper.end()
         );
         for (auto &externalPTSPair: src.pointToSetContainer) {
             flag |= unionPointToSet(externalPTSPair.first, externalPTSPair.second);
@@ -230,10 +230,10 @@ public:
         return flag;
     }
 
-    bool isAllNonStruct(const std::set<Pointer_t *> &maybeNonStructPtrSet) {
+    bool isAllNonStructRelated(const std::set<Pointer_t *> &maybeNonStructRelatedPtrSet) {
         bool flag = true;
-        for (auto *maybeNonStructPtr: maybeNonStructPtrSet) {
-            flag &= !isStruct(maybeNonStructPtr);
+        for (auto *maybeNonStructPtr: maybeNonStructRelatedPtrSet) {
+            flag &= !isStruct(maybeNonStructPtr) && !isField(maybeNonStructPtr);
         }
         return flag;
     }
@@ -372,7 +372,7 @@ public:
     }
 
     static inline void transferFactStoreNull(PointerAnalysisFact *fact,
-                                         Pointer_t *LHS) { // *LHS = nullptr
+                                             Pointer_t *LHS) { // *LHS = nullptr
         assertIsPointer(LHS);
 
         auto &LHS_PTS = fact->getPointToSet(LHS);
@@ -578,14 +578,22 @@ public:
         if (auto *argRHS = dyn_cast<Argument>(RHS)) {
             // Handle pointer-to relation of function argument
 #ifdef INTRA_PROCEDURE_ANALYSIS
-#ifdef ASSIGNMENT_DEBUG_DUMP
-            fprintf(stderr,
-                    "\t\t\t[-] Transfer Fact of Store Operation (Function Argument Handling, INTRA_PROCEDURE_ANALYSIS): %s(%p) <- %s(%p).\n",
-                    LHS->getName().data(), LHS, argRHS->getName().data(), argRHS);
-#endif
             fact->addObject(argRHS);
-            transferFactReference(fact, LHS, argRHS);
-
+            if (isa<AllocaInst>(LHS)) {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                fprintf(stderr,
+                        "\t\t\t[-] Transfer Fact of Store Operation (INTRA_PROCEDURE_ANALYSIS, Function Argument Handling, Reference): %s(%p) <- %s(%p).\n",
+                        LHS->getName().data(), LHS, argRHS->getName().data(), argRHS);
+#endif
+                transferFactReference(fact, LHS, argRHS);
+            } else {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                fprintf(stderr,
+                        "\t\t\t[-] Transfer Fact of Store Operation (INTRA_PROCEDURE_ANALYSIS, Function Argument Handling, Store): %s(%p) <- %s(%p).\n",
+                        LHS->getName().data(), LHS, argRHS->getName().data(), argRHS);
+#endif
+                transferFactStore(fact, LHS, argRHS);
+            }
             // Mock for structure
             mockStruct(argRHS, fact);
 #else // INTER_PROCEDURE_ANALYSIS
@@ -627,13 +635,15 @@ public:
         } else {
             if (!isa<ConstantPointerNull>(RHS)) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
-                fprintf(stderr, "\t\t\t[-] Transfer Fact of Store Operation (Normal Variable, Store): %s(%p) <- %s(%p).\n",
+                fprintf(stderr,
+                        "\t\t\t[-] Transfer Fact of Store Operation (Normal Variable, Store): %s(%p) <- %s(%p).\n",
                         LHS->getName().data(), LHS, RHS->getName().data(), RHS);
 #endif
                 transferFactStore(fact, LHS, RHS);
             } else {
 #ifdef ASSIGNMENT_DEBUG_DUMP
-                fprintf(stderr, "\t\t\t[-] Transfer Fact of Store Operation (Nullptr Store to Normal Variable, StoreNull): %s(%p) <- NULL.\n",
+                fprintf(stderr,
+                        "\t\t\t[-] Transfer Fact of Store Operation (Nullptr Store to Normal Variable, StoreNull): %s(%p) <- NULL.\n",
                         LHS->getName().data(), LHS);
 #endif
                 transferFactStoreNull(fact, LHS);
@@ -657,8 +667,11 @@ public:
             } else {
                 auto &RHS_PTS = fact->getPointToSet(RHS);
                 bool allStruct = fact->isAllStruct(RHS_PTS);
-                bool allNonStruct = fact->isAllNonStruct(RHS_PTS);
-                assert(allStruct ^ allNonStruct);
+                bool allField = fact->isAllField(RHS_PTS);
+                bool allNonStructRelated = fact->isAllNonStructRelated(RHS_PTS);
+                assert(allStruct && !allField && !allNonStructRelated ||
+                       !allStruct && allField && !allNonStructRelated ||
+                       !allStruct && !allField && allNonStructRelated);
                 if (allStruct) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
                     fprintf(stderr,
@@ -666,7 +679,14 @@ public:
                             LHS->getName().data(), LHS, RHS->getName().data(), RHS);
 #endif
                     transferFactFieldAssign(fact, LHS, RHS);
-                } else if (allNonStruct) {
+                } else if (allField) {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                    fprintf(stderr,
+                            "\t\t\t[-] Transfer Fact of GetElementPtr(Struct TempReg, Assign) Operation: %s(%p) <- %s(%p).\n",
+                            LHS->getName().data(), LHS, RHS->getName().data(), RHS);
+#endif
+                    transferFactAssign(fact, LHS, RHS);
+                } else if (allNonStructRelated) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
                     fprintf(stderr,
                             "\t\t\t[-] Transfer Fact of GetElementPtr(Struct TempReg, FieldLoad) Operation: %s(%p) <- %s(%p).\n",
@@ -733,6 +753,23 @@ public:
                         LHS->getName().data(), LHS, RHS->getName().data(), RHS);
 #endif
                 transferFactLoadStoreField(fact, LHS, RHS);
+            } else {
+                assert(false);
+            }
+        } else if (functionName.startswith("llvm.memset")) {
+            auto *LHS = callInst->getOperand(0);
+            auto *RHS = callInst->getOperand(1);
+            if (auto *constInt = dyn_cast<ConstantInt>(RHS)) {
+                if (constInt->getSExtValue() == 0) {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                    fprintf(stderr,
+                            "\t\t\t[-] Transfer Fact of llvm.memset(StoreNull) Operation: %s(%p).\n",
+                            LHS->getName().data(), LHS);
+#endif
+                    transferFactStoreNull(fact, LHS);
+                } else {
+                    assert(false);
+                }
             } else {
                 assert(false);
             }
