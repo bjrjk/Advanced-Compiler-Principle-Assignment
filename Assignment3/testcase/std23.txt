@@ -1,0 +1,6 @@
+14 : minus, plus
+25 : malloc
+26 : malloc
+30 : foo
+31 : make_simple_alias
+33 : foo

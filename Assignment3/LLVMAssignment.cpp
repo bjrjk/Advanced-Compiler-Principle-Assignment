@@ -31,6 +31,7 @@
 #include <llvm/Support/raw_ostream.h>
 
 #include "PointerAnalysis.h"
+#include "InterAnalysis.h"
 using namespace llvm;
 static ManagedStatic<LLVMContext> GlobalContext;
 static LLVMContext &getGlobalContext() { return *GlobalContext; }
@@ -49,8 +50,12 @@ struct EnableFunctionOptPass : public FunctionPass {
 
 char EnableFunctionOptPass::ID = 0;
 
-char PointerAnalysis::ID = 0;
-static RegisterPass<PointerAnalysis> RP("PointerAnalysis", "May Point-to Analysis");
+char PointerAnalysis::ID = 1;
+static RegisterPass<PointerAnalysis> PAP("PointerAnalysis", "May Point-to Analysis");
+
+char InterAnalysis::ID = 2;
+static RegisterPass<InterAnalysis> IAP("InterAnalysis", "Inter-Procedure May Point-to Analysis");
+
 static cl::opt<std::string> InputFilename(cl::Positional, cl::desc("<filename>.bc"), cl::init(""));
 
 
@@ -76,7 +81,8 @@ int main(int argc, char **argv) {
    Passes.add(llvm::createPromoteMemoryToRegisterPass());
 
    /// Your pass to run pointer analysis
-   Passes.add(new PointerAnalysis());
+   // Passes.add(new PointerAnalysis());
+   Passes.add(new InterAnalysis());
 
    Passes.run(*M.get());
 }

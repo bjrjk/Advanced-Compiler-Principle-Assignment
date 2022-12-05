@@ -1,0 +1,6 @@
+21 : minus, plus
+26 : clever
+27 : minus, plus
+41 : malloc
+46 : foo
+51 : foo

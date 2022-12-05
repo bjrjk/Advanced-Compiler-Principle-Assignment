@@ -1,3 +1,5 @@
+#pragma once
+
 #include <algorithm>
 #include <map>
 #include <set>
@@ -44,6 +46,7 @@ private:
     std::map<Pointer_t *, Pointer_t *> structToFieldMapper, fieldToStructMapper;
     std::map<Pointer_t *, Pointer_t *> mockPointerToPointeeMapper, mockPointeeToPointerMapper;
     std::set<Pointer_t *> isMockArrayContainer;
+    std::map<CallBase *, std::set<Function *>> callGraphContainer;
 public:
     PointerAnalysisFact() = default;
 
@@ -326,6 +329,14 @@ public:
 
     bool setIsArray(Pointer_t *arrayPtr) {
         return isMockArrayContainer.insert(arrayPtr).second;
+    }
+
+    void addCallEdge(CallBase *callBase, Function *function) {
+        callGraphContainer[callBase].insert(function);
+    }
+
+    const std::map<CallBase *, std::set<Function *>> &getCallGraph() const {
+        return callGraphContainer;
     }
 };
 
@@ -910,6 +921,20 @@ public:
             } else {
                 assert(false);
             }
+        } else { // Handle non-intrinsic functions
+            // Add to CallGraph
+            auto *calledFunction = callInst->getCalledOperand();
+            if (auto *function = dyn_cast<Function>(calledFunction)) {
+                fact->addCallEdge(callInst, function);
+            } else {
+                auto &PTS = fact->getPointToSet(calledFunction);
+                for (auto *maybeFunction: PTS) {
+                    if (auto *function = dyn_cast<Function>(maybeFunction)) {
+                        fact->addCallEdge(callInst, function);
+                    }
+                }
+            }
+            // TODO
         }
     }
 
@@ -978,7 +1003,9 @@ public:
         }
     }
 
-    bool runOnFunction(Function &F) override {
+    static void analyzeFunction(Function &F, PointerAnalysisVisitor *visitor,
+                                DataflowResult<PointerAnalysisFact>::Type *result,
+                                const PointerAnalysisFact& initVal) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
         labelAnonymousInstruction(F);
         fprintf(stderr, "[+] Analyzing Function %s %p, IR:\n", F.getName().data(), &F);
@@ -986,14 +1013,18 @@ public:
         F.dump();
         stderrNormalBackground();
 #endif
+        analyzeForward(&F, visitor, result, initVal);
+#ifdef ASSIGNMENT_DEBUG_DUMP
+        printDataflowResult<PointerAnalysisFact>(errs(), *result);
+#endif
+    }
+
+    bool runOnFunction(Function &F) override {
         PointerAnalysisVisitor visitor;
         DataflowResult<PointerAnalysisFact>::Type result;
         PointerAnalysisFact initVal;
 
-        analyzeForward(&F, &visitor, &result, initVal);
-#ifdef ASSIGNMENT_DEBUG_DUMP
-        printDataflowResult<PointerAnalysisFact>(errs(), result);
-#endif
+        analyzeFunction(F, &visitor, &result, initVal);
         return false;
     }
 };

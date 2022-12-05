@@ -1,0 +1,6 @@
+22 : minus, plus
+29 : foo
+34 : malloc
+36 : malloc
+38 : malloc
+47 : clever
