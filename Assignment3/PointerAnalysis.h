@@ -42,6 +42,8 @@ private:
     std::map<Pointer_t *, std::set<Object_t *>> pointToSetContainer;
     std::set<Pointer_t *> initializedPointerContainer;
     std::map<Pointer_t *, Pointer_t *> structToFieldMapper, fieldToStructMapper;
+    std::map<Pointer_t *, Pointer_t *> mockPointerToPointeeMapper, mockPointeeToPointerMapper;
+    std::set<Pointer_t *> isMockArrayContainer;
 public:
     PointerAnalysisFact() = default;
 
@@ -182,6 +184,18 @@ public:
             src.fieldToStructMapper.begin(),
             src.fieldToStructMapper.end()
         );
+        mockPointerToPointeeMapper.insert(
+            src.mockPointerToPointeeMapper.begin(),
+            src.mockPointerToPointeeMapper.end()
+        );
+        mockPointeeToPointerMapper.insert(
+            src.mockPointeeToPointerMapper.begin(),
+            src.mockPointeeToPointerMapper.end()
+        );
+        isMockArrayContainer.insert(
+            src.isMockArrayContainer.begin(),
+            src.isMockArrayContainer.end()
+        );
         for (auto &externalPTSPair: src.pointToSetContainer) {
             flag |= unionPointToSet(externalPTSPair.first, externalPTSPair.second);
         }
@@ -214,6 +228,10 @@ public:
         return fieldToStructMapper.count(maybeFieldPtr);
     }
 
+    bool isArray(Pointer_t *maybeArrayPtr) const {
+        return isMockArrayContainer.count(maybeArrayPtr);
+    }
+
     bool isAllStruct(const std::set<Pointer_t *> &maybeStructPtrSet) const {
         bool flag = true;
         for (auto *maybeStructPtr: maybeStructPtrSet) {
@@ -226,6 +244,22 @@ public:
         bool flag = true;
         for (auto *maybeFieldPtr: maybeFieldPtrSet) {
             flag &= isField(maybeFieldPtr);
+        }
+        return flag;
+    }
+
+    bool isAllArray(const std::set<Pointer_t *> &maybeArrayPtrSet) const {
+        bool flag = true;
+        for (auto *maybeArrayPtr: maybeArrayPtrSet) {
+            flag &= isArray(maybeArrayPtr);
+        }
+        return flag;
+    }
+
+    bool isAllNonArray(const std::set<Pointer_t *> &maybeNonArrayPtrSet) const {
+        bool flag = true;
+        for (auto *maybeNonArrayPtr: maybeNonArrayPtrSet) {
+            flag &= !isArray(maybeNonArrayPtr);
         }
         return flag;
     }
@@ -259,9 +293,39 @@ public:
             return true;
         } else {
             assert(structToFieldMapper[structPtr] == fieldPtr);
-            assert(fieldToStructMapper[fieldPtr] = structPtr);
+            assert(fieldToStructMapper[fieldPtr] == structPtr);
             return false;
         }
+    }
+
+    Pointer_t *getMockPointerPointee(Pointer_t *pointer) const {
+        assert(mockPointerToPointeeMapper.count(pointer) > 0);
+        return mockPointerToPointeeMapper.find(pointer)->second;
+    }
+
+    std::set<Pointer_t *> getAllMockPointerPointee(const std::set<Pointer_t *> &mockPointerSet) const {
+        std::set<Object_t *> toUnionSet;
+        for (auto *object: mockPointerSet) {
+            auto *RHSPointee = getMockPointerPointee(object);
+            toUnionSet.insert(RHSPointee);
+        }
+        return toUnionSet;
+    }
+
+    bool setMockPointerPointee(Pointer_t *pointer, Pointer_t *pointee) {
+        if (mockPointerToPointeeMapper.count(pointer) == 0) {
+            mockPointerToPointeeMapper[pointer] = pointee;
+            mockPointeeToPointerMapper[pointee] = pointer;
+            return true;
+        } else {
+            assert(mockPointerToPointeeMapper[pointer] == pointee);
+            assert(mockPointeeToPointerMapper[pointee] == pointer);
+            return false;
+        }
+    }
+
+    bool setIsArray(Pointer_t *arrayPtr) {
+        return isMockArrayContainer.insert(arrayPtr).second;
     }
 };
 
@@ -389,6 +453,27 @@ public:
         }
     }
 
+    static inline void transferFactArrayStoreNull(PointerAnalysisFact *fact,
+                                             Pointer_t *LHS) { // LHS[] = nullptr
+        assertIsPointer(LHS);
+
+        auto &LHS_PTS = fact->getPointToSet(LHS);
+        assert(fact->isAllArray(LHS_PTS));
+        auto LHS_PTS_Elem = fact->getAllMockPointerPointee(LHS_PTS);
+
+        switch (LHS_PTS.size()) {
+            case 0: {
+                fact->setTop();
+                break;
+            }
+            case 1: {
+                Pointer_t *onlyPointee = *LHS_PTS_Elem.begin();
+                fact->clearPointToSet(onlyPointee);
+                break;
+            }
+        }
+    }
+
     static inline void transferFactLoadStoreField(PointerAnalysisFact *fact,
                                                   Pointer_t *LHS, Pointer_t *RHS) { // *LHS = *RHS (memcpy)
         assertIsPointer(LHS);
@@ -489,6 +574,14 @@ public:
         fact->unionPointToSet(LHS, toUnionSet);
     }
 
+    static inline void transferFactArrayAssign(PointerAnalysisFact *fact,
+                                               Pointer_t *LHS,
+                                               Pointer_t *RHS) { // LHS = RHS[] (RHS point to an array)
+        auto toUnionSet = fact->getAllMockPointerPointee(fact->getPointToSet(RHS));
+        fact->clearPointToSet(LHS);
+        fact->unionPointToSet(LHS, toUnionSet);
+    }
+
     static Instruction *createNewInst(const Twine &name, Type *type) {
         Instruction *inst = new AllocaInst(type, 0);
         inst->setName(name);
@@ -500,24 +593,29 @@ public:
         return createNewInst(parent->getName() + "._", PointerType::get(IntegerType::get(parent->getContext(), 8), 0));
     }
 
-    static void mockStruct(Value *maybeMockPointer, PointerAnalysisFact *fact, Type *type) {
-        Type *rootType = [=]() {
-            Type *curType = type;
-            while (curType->isPointerTy())
+    static void mockObject(Value *maybeMockPointer, PointerAnalysisFact *fact, Type *type) {
+        Type *curType = type;
+        Value *parent = maybeMockPointer;
+        std::string nameSuffix;
+        while (curType->isPointerTy() || curType->isArrayTy()) {
+            if (curType->isPointerTy()) {
                 curType = curType->getPointerElementType();
-            return curType;
-        }();
-
-        if (rootType->isStructTy()) {
-            Type *curType = type;
-            Value *parent = maybeMockPointer;
-            while (curType->isPointerTy()) {
-                curType = curType->getPointerElementType();
-                Instruction *mockObject = createNewInst(parent->getName() + ".mk", curType);
-                fact->addObject(mockObject);
-                transferFactReference(fact, parent, mockObject);
-                parent = mockObject;
+                nameSuffix = ".p";
+            } else if (curType->isArrayTy()) {
+                curType = curType->getArrayElementType();
+                nameSuffix = ".a";
+            } else {
+                assert(false);
             }
+            Instruction *mockObject = createNewInst(parent->getName() + nameSuffix, curType);
+            fact->addObject(mockObject);
+            transferFactReference(fact, parent, mockObject);
+            if (nameSuffix == ".a") fact->setIsArray(mockObject);
+            fact->setMockPointerPointee(parent, mockObject);
+            parent = mockObject;
+        }
+
+        if (curType->isStructTy()) {
             Instruction *field = createStructField(parent);
             fact->addObject(field);
             transferFactReference(fact, parent, field);
@@ -525,8 +623,8 @@ public:
         }
     }
 
-    static void mockStruct(Value *maybeMockPointer, PointerAnalysisFact *fact) {
-        mockStruct(maybeMockPointer, fact, maybeMockPointer->getType());
+    static void mockObject(Value *maybeMockPointer, PointerAnalysisFact *fact) {
+        mockObject(maybeMockPointer, fact, maybeMockPointer->getType());
     }
 
     static void transferInstAlloca(AllocaInst *allocaInst, PointerAnalysisFact *fact) {
@@ -542,7 +640,13 @@ public:
             fprintf(stderr, "\t\t\t[-] Struct Allocation.\n");
 #endif
             fact->addObject(allocaInst);
-            mockStruct(allocaInst, fact, allocaInst->getAllocatedType());
+            mockObject(allocaInst, fact, allocaInst->getAllocatedType());
+        } else if (allocaInst->getAllocatedType()->isArrayTy()) {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+            fprintf(stderr, "\t\t\t[-] Array Allocation.\n");
+#endif
+            fact->addObject(allocaInst);
+            mockObject(allocaInst, fact, allocaInst->getAllocatedType());
         } else {
             // Object Allocation
 #ifdef ASSIGNMENT_DEBUG_DUMP
@@ -595,7 +699,7 @@ public:
                 transferFactStore(fact, LHS, argRHS);
             }
             // Mock for structure
-            mockStruct(argRHS, fact);
+            mockObject(argRHS, fact);
 #else // INTER_PROCEDURE_ANALYSIS
             fprintf(stderr, "Inter-procedure analysis unimplemented!\n");
             assert(false);
@@ -697,8 +801,23 @@ public:
                     assert(false);
                 }
             }
-        } else {
-            assert(false);
+        } else { // Handle Array
+            if (LHS->getName().startswith("arrayid")) {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                fprintf(stderr,
+                        "\t\t\t[-] Transfer Fact of GetElementPtr(ArrayID, ArrayAssign) Operation: %s(%p) <- %s(%p).\n",
+                        LHS->getName().data(), LHS, RHS->getName().data(), RHS);
+#endif
+                transferFactArrayAssign(fact, LHS, RHS);
+            } else if (LHS->getName().startswith("arraydecay")) {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                fprintf(stderr,
+                        "\t\t\t[-] Transfer Fact of GetElementPtr(ArrayDecay, Assign) Operation: %s(%p) <- %s(%p).\n",
+                        LHS->getName().data(), LHS, RHS->getName().data(), RHS);
+#endif
+                transferFactAssign(fact, LHS, RHS);
+            }
+
         }
     }
 
@@ -714,7 +833,7 @@ public:
                         LHS->getName().data(), LHS, RHS->getName().data(), RHS);
 #endif
                 // Handle malloc mock
-                mockStruct(LHS, fact);
+                mockObject(LHS, fact);
             }
         } else {
 #ifdef ASSIGNMENT_DEBUG_DUMP
@@ -761,12 +880,24 @@ public:
             auto *RHS = callInst->getOperand(1);
             if (auto *constInt = dyn_cast<ConstantInt>(RHS)) {
                 if (constInt->getSExtValue() == 0) {
+                    auto &LHS_PTS = fact->getPointToSet(LHS);
+                    if (fact->isAllArray(LHS_PTS)) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
-                    fprintf(stderr,
-                            "\t\t\t[-] Transfer Fact of llvm.memset(StoreNull) Operation: %s(%p).\n",
-                            LHS->getName().data(), LHS);
+                        fprintf(stderr,
+                                "\t\t\t[-] Transfer Fact of llvm.memset(Array, ArrayStoreNull) Operation: %s(%p).\n",
+                                LHS->getName().data(), LHS);
 #endif
-                    transferFactStoreNull(fact, LHS);
+                        transferFactArrayStoreNull(fact, LHS);
+                    } else if (fact->isAllNonArray(LHS_PTS)) {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                        fprintf(stderr,
+                                "\t\t\t[-] Transfer Fact of llvm.memset(Non-Array, StoreNull) Operation: %s(%p).\n",
+                                LHS->getName().data(), LHS);
+#endif
+                        transferFactStoreNull(fact, LHS);
+                    } else {
+                        assert(false);
+                    }
                 } else {
                     assert(false);
                 }
