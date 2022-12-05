@@ -991,7 +991,9 @@ public:
         PointerAnalysisFact initVal;
 
         analyzeForward(&F, &visitor, &result, initVal);
+#ifdef ASSIGNMENT_DEBUG_DUMP
         printDataflowResult<PointerAnalysisFact>(errs(), result);
+#endif
         return false;
     }
 };
