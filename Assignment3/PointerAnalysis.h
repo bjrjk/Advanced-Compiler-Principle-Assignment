@@ -720,7 +720,13 @@ public:
             // Handle alloca address reference store
             transferFactReferenceStore(fact, LHS, allocaRHS);
         } else if (auto *allocaLHS = dyn_cast<AllocaInst>(LHS)) { // fact->trySetPointerInitialized(LHS)
-            if (!isa<ConstantPointerNull>(RHS)) {
+            if (isa<ConstantInt>(RHS)) {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                fprintf(stderr,
+                        "\t\t\t[-] Transfer Fact of Store Operation (Constant Assign, omitted): %s(%p) <- %s(%p).\n",
+                        LHS->getName().data(), LHS, RHS->getName().data(), RHS);
+#endif
+            } else if (!isa<ConstantPointerNull>(RHS)) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
                 fprintf(stderr,
                         "\t\t\t[-] Transfer Fact of Store Operation (Assign to Alloca Content, Assign): %s(%p) <- %s(%p).\n",
