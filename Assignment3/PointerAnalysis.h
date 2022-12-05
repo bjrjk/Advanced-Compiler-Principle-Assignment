@@ -214,7 +214,7 @@ public:
         return fieldToStructMapper.count(maybeFieldPtr);
     }
 
-    bool isAllStruct(const std::set<Pointer_t *> &maybeStructPtrSet) {
+    bool isAllStruct(const std::set<Pointer_t *> &maybeStructPtrSet) const {
         bool flag = true;
         for (auto *maybeStructPtr: maybeStructPtrSet) {
             flag &= isStruct(maybeStructPtr);
@@ -222,7 +222,7 @@ public:
         return flag;
     }
 
-    bool isAllField(const std::set<Pointer_t *> &maybeFieldPtrSet) {
+    bool isAllField(const std::set<Pointer_t *> &maybeFieldPtrSet) const {
         bool flag = true;
         for (auto *maybeFieldPtr: maybeFieldPtrSet) {
             flag &= isField(maybeFieldPtr);
@@ -230,7 +230,7 @@ public:
         return flag;
     }
 
-    bool isAllNonStructRelated(const std::set<Pointer_t *> &maybeNonStructRelatedPtrSet) {
+    bool isAllNonStructRelated(const std::set<Pointer_t *> &maybeNonStructRelatedPtrSet) const {
         bool flag = true;
         for (auto *maybeNonStructPtr: maybeNonStructRelatedPtrSet) {
             flag &= !isStruct(maybeNonStructPtr) && !isField(maybeNonStructPtr);
@@ -311,7 +311,7 @@ inline raw_ostream &operator<<(raw_ostream &out, const PointerAnalysisFact &info
 
 class PointerAnalysisVisitor : public DataflowVisitor<struct PointerAnalysisFact> {
 public:
-    PointerAnalysisVisitor() {}
+    PointerAnalysisVisitor() = default;
 
     void merge(PointerAnalysisFact *dest, const PointerAnalysisFact &src) override {
         dest->unionFact(src);
@@ -529,7 +529,7 @@ public:
         mockStruct(maybeMockPointer, fact, maybeMockPointer->getType());
     }
 
-    void transferInstAlloca(AllocaInst *allocaInst, PointerAnalysisFact *fact) {
+    static void transferInstAlloca(AllocaInst *allocaInst, PointerAnalysisFact *fact) {
         // Heap Abstraction: Allocation Site
         if (allocaInst->getAllocatedType()->isPointerTy()) {
             // Pointer Allocation
@@ -552,7 +552,7 @@ public:
         }
     }
 
-    void transferInstLoad(LoadInst *loadInst, PointerAnalysisFact *fact) {
+    static void transferInstLoad(LoadInst *loadInst, PointerAnalysisFact *fact) {
         auto *LHS = loadInst;
         auto *RHS = loadInst->getPointerOperand();
         if (isa<AllocaInst>(RHS)) {
@@ -572,7 +572,7 @@ public:
         }
     }
 
-    void transferInstStore(StoreInst *storeInst, PointerAnalysisFact *fact) {
+    static void transferInstStore(StoreInst *storeInst, PointerAnalysisFact *fact) {
         auto *LHS = storeInst->getPointerOperand();
         auto *RHS = storeInst->getValueOperand();
         if (auto *argRHS = dyn_cast<Argument>(RHS)) {
@@ -652,7 +652,7 @@ public:
         }
     }
 
-    void transferInstGetElemPtr(GetElementPtrInst *getElemPtrInst, PointerAnalysisFact *fact) {
+    static void transferInstGetElemPtr(GetElementPtrInst *getElemPtrInst, PointerAnalysisFact *fact) {
         // `getelementptr %struct, src` is computing an address of structure's data field
         auto *LHS = getElemPtrInst;
         auto *RHS = getElemPtrInst->getPointerOperand();
@@ -702,7 +702,7 @@ public:
         }
     }
 
-    void transferInstBitCast(BitCastInst *bitCastInst, PointerAnalysisFact *fact) {
+    static void transferInstBitCast(BitCastInst *bitCastInst, PointerAnalysisFact *fact) {
         auto *LHS = bitCastInst;
         auto *RHS = bitCastInst->getOperand(0);
 
@@ -726,7 +726,7 @@ public:
         }
     }
 
-    void transferInstCall(CallBase *callInst, PointerAnalysisFact *fact) {
+    static void transferInstCall(CallBase *callInst, PointerAnalysisFact *fact) {
         auto functionName = callInst->getCalledOperand()->getName();
         if (functionName.startswith("llvm.dbg")) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
@@ -827,7 +827,7 @@ public:
 
     PointerAnalysis() : FunctionPass(ID) {}
 
-    void labelAnonymousInstruction(Function &function) {
+    static void labelAnonymousInstruction(Function &function) {
         char buf[1024]; // Warning: Buffer Overflow
         int counter = 0;
 
