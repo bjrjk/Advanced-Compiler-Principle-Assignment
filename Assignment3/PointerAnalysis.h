@@ -296,16 +296,9 @@ public:
         return toUnionSet;
     }
 
-    bool setStructField(Pointer_t *structPtr, Pointer_t *fieldPtr) {
-        if (structToFieldMapper.count(structPtr) == 0) {
-            structToFieldMapper[structPtr] = fieldPtr;
-            fieldToStructMapper[fieldPtr] = structPtr;
-            return true;
-        } else {
-            assert(structToFieldMapper[structPtr] == fieldPtr);
-            assert(fieldToStructMapper[fieldPtr] == structPtr);
-            return false;
-        }
+    void setStructField(Pointer_t *structPtr, Pointer_t *fieldPtr) {
+        structToFieldMapper[structPtr] = fieldPtr;
+        fieldToStructMapper[fieldPtr] = structPtr;
     }
 
     Pointer_t *getMockPointerPointee(Pointer_t *pointer) const {
@@ -354,7 +347,7 @@ inline raw_ostream &operator<<(raw_ostream &out, const PointerAnalysisFact &info
     counter = 0;
     out << "\t\t[!] Pointer Container: \n";
     for (auto *pointer: info.getPointerSet()) {
-        sprintf(buf, "%15s(%p)\t\t\t\t", pointer->getName().data(), pointer);
+        sprintf(buf, "%20s(%p)\t\t\t\t", pointer->getName().data(), pointer);
         out << buf;
         if (counter == 3) out << "\n";
         counter = (counter + 1) % 4;
@@ -364,7 +357,7 @@ inline raw_ostream &operator<<(raw_ostream &out, const PointerAnalysisFact &info
     counter = 0;
     out << "\t\t[!] Object Container: \n";
     for (auto *object: info.getObjectSet()) {
-        sprintf(buf, "%15s(%p)\t\t\t\t", object->getName().data(), object);
+        sprintf(buf, "%20s(%p)\t\t\t\t", object->getName().data(), object);
         out << buf;
         if (counter == 3) out << "\n";
         counter = (counter + 1) % 4;
@@ -379,7 +372,7 @@ inline raw_ostream &operator<<(raw_ostream &out, const PointerAnalysisFact &info
         out << buf;
         counter = 0;
         for (auto *object: *PTS) {
-            sprintf(buf, "%15s(%p)\t\t\t\t", object->getName().data(), object);
+            sprintf(buf, "%20s(%p)\t\t\t\t", object->getName().data(), object);
             out << buf;
             if (counter == 3) out << "\n";
             counter = (counter + 1) % 4;
@@ -457,7 +450,9 @@ public:
             }
             default: {
                 auto RHS_PTS = fact->getPointToSet(RHS);
-                fact->unionAllPointToSet(RHS_PTS);
+                for (auto *pointer: LHS_PTS) {
+                    fact->unionPointToSet(pointer, RHS_PTS);
+                }
                 break;
             }
         }
@@ -521,7 +516,9 @@ public:
             default: {
                 auto RHS_PTS = fact->getPointToSet(RHS);
                 auto RHS_PTS_PTS = fact->getPointToSet(RHS_PTS);
-                fact->unionAllPointToSet(RHS_PTS_PTS);
+                for (auto *pointer: LHS_PTS) {
+                    fact->unionPointToSet(pointer, RHS_PTS_PTS);
+                }
                 break;
             }
         }
@@ -547,7 +544,9 @@ public:
             default: {
                 auto RHS_PTS = fact->getPointToSet(RHS);
                 auto RHS_PTS_PTS = fact->getPointToSet(RHS_PTS);
-                fact->unionAllPointToSet(RHS_PTS_PTS);
+                for (auto *pointer: LHS_PTS_Field) {
+                    fact->unionPointToSet(pointer, RHS_PTS_PTS);
+                }
                 break;
             }
         }
@@ -572,7 +571,9 @@ public:
             default: {
                 std::set<Pointer_t *> RHS_PTS;
                 RHS_PTS.insert(RHS);
-                fact->unionAllPointToSet(RHS_PTS);
+                for (auto *pointer: LHS_PTS) {
+                    fact->unionPointToSet(pointer, RHS_PTS);
+                }
                 break;
             }
         }
@@ -653,6 +654,31 @@ public:
 
     static void mockObject(Value *maybeMockPointer, PointerAnalysisFact *fact) {
         mockObject(maybeMockPointer, fact, maybeMockPointer->getType());
+    }
+
+    static void clearPointToGraphSubNodePointee(PointerAnalysisFact *fact, CallBase *callInst) {
+        unsigned int argNum = callInst->getNumArgOperands();
+        std::set<Pointer_t *> toClearPointee, workList;
+        for (int i = 0; i < argNum; i++) {
+            auto *curArg = callInst->getArgOperand(i);
+            for (auto *pointee: fact->getPointToSet(curArg)) {
+                workList.insert(pointee);
+                toClearPointee.insert(pointee);
+            }
+        }
+        while (!workList.empty()) {
+            auto *curPointer = *workList.begin();
+            workList.erase(workList.begin());
+            for (auto *pointee: fact->getPointToSet(curPointer)) {
+                if (!toClearPointee.count(pointee)) {
+                    workList.insert(pointee);
+                    toClearPointee.insert(pointee);
+                }
+            }
+        }
+        for (auto *pointer: toClearPointee) {
+            fact->clearPointToSet(pointer);
+        }
     }
 
     static void transferInstAlloca(AllocaInst *allocaInst, PointerAnalysisFact *fact) {
@@ -1009,6 +1035,7 @@ public:
                             calledFunction->getName().data(), calledFunction);
 #endif
                 }
+                clearPointToGraphSubNodePointee(fact, callInst);
                 for (auto *calledFunction: calledFunctionSet) {
                     // Handle return value transferring
                     BasicBlock *calledFuncRetBasicBlock;
@@ -1095,8 +1122,12 @@ public:
 
         for (auto &basicBlock: function) {
             for (auto &inst: basicBlock) {
-                if (!inst.getType()->isVoidTy() && inst.getName().equals("")) {
-                    sprintf(buf, "tmp_%d", counter++);
+                if (!inst.getType()->isVoidTy()) {
+                    if (inst.getName().equals("")) {
+                        sprintf(buf, "%s_t%d", function.getName().data(), counter++);
+                    } else {
+                        sprintf(buf, "%s_%s", function.getName().data(), inst.getName().data());
+                    }
                     inst.setName(buf);
                 }
             }
