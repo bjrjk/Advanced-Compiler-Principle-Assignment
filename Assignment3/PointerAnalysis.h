@@ -984,11 +984,6 @@ public:
 #ifndef INTRA_PROCEDURE_ANALYSIS
                 unsigned int argNum = callInst->getNumArgOperands();
                 for (auto *calledFunction: calledFunctionSet) {
-#ifdef ASSIGNMENT_DEBUG_DUMP
-                    fprintf(stderr,
-                            "\t\t\t[-] Inter-Procedure start to analyze: %s(%p).\n",
-                            calledFunction->getName().data(), calledFunction);
-#endif
                     // Handle argument-parameter transferring
                     for (int i = 0; i < argNum; i++) {
                         auto *curArg = callInst->getArgOperand(i);
@@ -996,9 +991,23 @@ public:
                         transferFactNonClearAssign(fact, curPara, curArg);
                     }
                 }
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                fprintf(stderr, "\t\t\t[-] Inter-Procedure argument-parameter transferred fact:\n");
+                printDataflowFact(errs(), *fact);
+#endif
                 for (auto *calledFunction: calledFunctionSet) {
                     // Analyze function
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                    fprintf(stderr,
+                            "\t\t\t[-] Inter-Procedure start to analyze: %s(%p).\n",
+                            calledFunction->getName().data(), calledFunction);
+#endif
                     analyzeForward(calledFunction, visitor, resultContainer, *fact, false);
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                    fprintf(stderr,
+                            "\t\t\t[-] Inter-Procedure end analyzing: %s(%p).\n",
+                            calledFunction->getName().data(), calledFunction);
+#endif
                 }
                 for (auto *calledFunction: calledFunctionSet) {
                     // Handle return value transferring
@@ -1015,13 +1024,14 @@ public:
                         return static_cast<ReturnInst *>(nullptr);
                     }(&calledFuncRetBasicBlock);
                     fact->unionFact((*resultContainer)[calledFuncRetBasicBlock].output);
-                    transferFactNonClearAssign(fact, callInst, calledFuncRetInst->getReturnValue());
-#ifdef ASSIGNMENT_DEBUG_DUMP
-                    fprintf(stderr,
-                            "\t\t\t[-] Inter-Procedure end analyzing: %s(%p).\n",
-                            calledFunction->getName().data(), calledFunction);
-#endif
+                    if (calledFuncRetInst && calledFuncRetInst->getReturnValue()) {
+                        transferFactNonClearAssign(fact, callInst, calledFuncRetInst->getReturnValue());
+                    }
                 }
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                fprintf(stderr, "\t\t\t[-] Inter-Procedure return value transferred fact:\n");
+                printDataflowFact(errs(), *fact);
+#endif
 #endif
             }
         }
