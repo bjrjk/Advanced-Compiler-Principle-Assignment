@@ -22,6 +22,9 @@
 
 using namespace llvm;
 
+template<class T>
+struct InterAnalysisInfo;
+
 ///Base dataflow visitor class, defines the dataflow function
 
 template<class T>
@@ -34,7 +37,8 @@ public:
     /// @block the Basic Block
     /// @DFVal the input dataflow value
     /// @isForward true to compute fact forward, otherwise backward
-    virtual void transferBasicBlock(BasicBlock *block, T *fact, bool isForward) {
+    virtual void
+    transferBasicBlock(BasicBlock *block, T *fact, bool isForward, InterAnalysisInfo<T> &interAnalysisInfo) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
         fprintf(stderr, "\t[+] Analyzing Basic Block %p, IR:\n", block);
         stderrCyanBackground();
@@ -44,12 +48,12 @@ public:
         if (isForward) {
             for (auto ii = block->begin(); ii != block->end(); ++ii) {
                 Instruction *inst = &*ii;
-                transferInst(inst, fact);
+                transferInst(inst, fact, interAnalysisInfo);
             }
         } else {
             for (auto rii = block->rbegin(); rii != block->rend(); ++rii) {
                 Instruction *inst = &*rii;
-                transferInst(inst, fact);
+                transferInst(inst, fact, interAnalysisInfo);
             }
         }
     }
@@ -60,7 +64,7 @@ public:
     /// @inst the Instruction
     /// @dfval the input dataflow value
     /// @return true if dfval changed
-    virtual void transferInst(Instruction *inst, T *fact) = 0;
+    virtual void transferInst(Instruction *inst, T *fact, InterAnalysisInfo<T> &interAnalysisInfo) = 0;
 
     ///
     /// Merge of two DFVals, dest will be the merged result
@@ -92,6 +96,20 @@ struct DataflowResult {
     typedef typename std::map<BasicBlock *, DataflowFactPair<T> > Type;
 };
 
+template<class T>
+struct InterAnalysisInfo {
+    bool isEntryPoint;
+    DataflowVisitor<T> *visitor;
+    typename DataflowResult<T>::Type *resultContainer;
+    Function *function;
+
+
+    InterAnalysisInfo(bool isEntryPoint, DataflowVisitor<T> *visitor,
+                      typename DataflowResult<T>::Type *resultContainer, Function *function) :
+        isEntryPoint(isEntryPoint), visitor(visitor),
+        resultContainer(resultContainer), function(function) {}
+};
+
 /// 
 /// Compute a forward iterated fixedpoint dataflow function, using a user-supplied
 /// visitor function. Note that the caller must ensure that the function is
@@ -107,8 +125,9 @@ template<class T>
 void analyzeForward(Function *fn,
                     DataflowVisitor<T> *visitor,
                     typename DataflowResult<T>::Type *resultContainer,
-                    const T &initVal) {
+                    const T &initVal, bool isEntrypoint) {
     typename DataflowResult<T>::Type &result = *resultContainer;
+    InterAnalysisInfo<T> interAnalysisInfo(isEntrypoint, visitor, resultContainer, fn);
     std::set<BasicBlock *> workList;
 
     // Initialize the workList with all blocks
@@ -133,7 +152,7 @@ void analyzeForward(Function *fn,
         result[bb].input = bbFact; // Warning: assign constructor used here!
 
         // Transfer basic block
-        visitor->transferBasicBlock(bb, &bbFact, true);
+        visitor->transferBasicBlock(bb, &bbFact, true, interAnalysisInfo);
         // From now on, bbFact is bb's output fact
 
         // If outgoing value changed, propagate it along the CFG
@@ -189,7 +208,7 @@ void analyzeBackward(Function *fn,
         result[bb].output = bbFact; // Warning: assign constructor used here!
 
         // Transfer basic block
-        visitor->transferBasicBlock(bb, &bbFact, false);
+        visitor->transferBasicBlock(bb, &bbFact); //TODO: Won't be fixed
         // From now on, bbFact is bb's input fact
 
         // If outgoing value changed, propagate it along the CFG

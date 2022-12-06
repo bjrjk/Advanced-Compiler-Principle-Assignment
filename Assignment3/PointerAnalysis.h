@@ -20,7 +20,8 @@ typedef Value Object_t;
 typedef Value Pointer_t;
 
 static inline bool isObject(Object_t *maybeObject) {
-    return isa<Instruction>(maybeObject) || isa<Argument>(maybeObject) || isa<Function>(maybeObject);
+    return isa<Instruction>(maybeObject) || isa<Argument>(maybeObject) || isa<Function>(maybeObject) ||
+           isa<ConstantInt>(maybeObject);
 }
 
 static inline bool isPointer(Pointer_t *maybePointer) {
@@ -99,6 +100,12 @@ public:
 
         return pointToSetContainer[pointer].insert(object).second;
         // Reference: https://zh.cppreference.com/w/cpp/container/set/insert
+    }
+
+    bool removePointTo(Pointer_t *pointer, Object_t *object) {
+        addPointer(pointer);
+
+        return pointToSetContainer[pointer].erase(object);
     }
 
     bool unionPointToSet(Pointer_t *pointer, const std::set<Object_t *> &externalObjectSet) {
@@ -401,6 +408,16 @@ public:
         fact->addPointTo(LHS, RHS);
     }
 
+    static inline void transferFactNonClearAssign(PointerAnalysisFact *fact,
+                                                  Pointer_t *LHS, Pointer_t *RHS) { // LHS = RHS
+        assertIsPointer(LHS);
+        assertIsPointer(RHS);
+
+        auto RHS_PTS = fact->getPointToSet(RHS);
+        fact->unionPointToSet(LHS, RHS_PTS);
+        fact->removePointTo(LHS, LHS);
+    }
+
     static inline void transferFactAssign(PointerAnalysisFact *fact,
                                           Pointer_t *LHS, Pointer_t *RHS) { // LHS = RHS
         assertIsPointer(LHS);
@@ -465,7 +482,7 @@ public:
     }
 
     static inline void transferFactArrayStoreNull(PointerAnalysisFact *fact,
-                                             Pointer_t *LHS) { // LHS[] = nullptr
+                                                  Pointer_t *LHS) { // LHS[] = nullptr
         assertIsPointer(LHS);
 
         auto &LHS_PTS = fact->getPointToSet(LHS);
@@ -687,34 +704,58 @@ public:
         }
     }
 
-    static void transferInstStore(StoreInst *storeInst, PointerAnalysisFact *fact) {
+    static void transferInstStore(StoreInst *storeInst, PointerAnalysisFact *fact, bool isEntrypoint) {
         auto *LHS = storeInst->getPointerOperand();
         auto *RHS = storeInst->getValueOperand();
         if (auto *argRHS = dyn_cast<Argument>(RHS)) {
             // Handle pointer-to relation of function argument
+            bool isIntraProcedure = false;
 #ifdef INTRA_PROCEDURE_ANALYSIS
-            fact->addObject(argRHS);
-            if (isa<AllocaInst>(LHS)) {
+            isIntraProcedure = true;
 #ifdef ASSIGNMENT_DEBUG_DUMP
-                fprintf(stderr,
-                        "\t\t\t[-] Transfer Fact of Store Operation (INTRA_PROCEDURE_ANALYSIS, Function Argument Handling, Reference): %s(%p) <- %s(%p).\n",
-                        LHS->getName().data(), LHS, argRHS->getName().data(), argRHS);
+            fprintf(stderr, "\t\t\t[-] Intra-Procedure Analysis.\n");
 #endif
-                transferFactReference(fact, LHS, argRHS);
-            } else {
+#else
 #ifdef ASSIGNMENT_DEBUG_DUMP
-                fprintf(stderr,
-                        "\t\t\t[-] Transfer Fact of Store Operation (INTRA_PROCEDURE_ANALYSIS, Function Argument Handling, Store): %s(%p) <- %s(%p).\n",
-                        LHS->getName().data(), LHS, argRHS->getName().data(), argRHS);
+            fprintf(stderr, "\t\t\t[-] Inter-Procedure Analysis.\n");
 #endif
-                transferFactStore(fact, LHS, argRHS);
+#endif
+            if (isIntraProcedure || isEntrypoint) { // Intra-Procedure Analysis or Entrypoint of Inter-Procedure Analysis
+                fact->addObject(argRHS);
+                if (isa<AllocaInst>(LHS)) {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                    fprintf(stderr,
+                            "\t\t\t[-] Transfer Fact of Store Operation (Function Argument Mocking, Reference): %s(%p) <- %s(%p).\n",
+                            LHS->getName().data(), LHS, argRHS->getName().data(), argRHS);
+#endif
+                    transferFactReference(fact, LHS, argRHS);
+                } else {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                    fprintf(stderr,
+                            "\t\t\t[-] Transfer Fact of Store Operation (Function Argument Mocking, Store): %s(%p) <- %s(%p).\n",
+                            LHS->getName().data(), LHS, argRHS->getName().data(), argRHS);
+#endif
+                    transferFactStore(fact, LHS, argRHS);
+                }
+                // Mock for structure
+                mockObject(argRHS, fact);
+            } else { // Non-Entrypoint of Inter-Procedure Analysis
+                if (isa<AllocaInst>(LHS)) {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                    fprintf(stderr,
+                            "\t\t\t[-] Transfer Fact of Store Operation (Function Argument Transferring, Assign): %s(%p) <- %s(%p).\n",
+                            LHS->getName().data(), LHS, argRHS->getName().data(), argRHS);
+#endif
+                    transferFactAssign(fact, LHS, argRHS);
+                } else {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                    fprintf(stderr,
+                            "\t\t\t[-] Transfer Fact of Store Operation (Function Argument Transferring, Store): %s(%p) <- %s(%p).\n",
+                            LHS->getName().data(), LHS, argRHS->getName().data(), argRHS);
+#endif
+                    transferFactStore(fact, LHS, argRHS);
+                }
             }
-            // Mock for structure
-            mockObject(argRHS, fact);
-#else // INTER_PROCEDURE_ANALYSIS
-            fprintf(stderr, "Inter-procedure analysis unimplemented!\n");
-            assert(false);
-#endif
         } else if (isa<AllocaInst>(LHS) && isa<AllocaInst>(RHS)) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
             fprintf(stderr,
@@ -769,7 +810,6 @@ public:
 #endif
                 transferFactStoreNull(fact, LHS);
             }
-
         }
     }
 
@@ -862,7 +902,9 @@ public:
         }
     }
 
-    static void transferInstCall(CallBase *callInst, PointerAnalysisFact *fact) {
+    static void transferInstCall(CallBase *callInst, PointerAnalysisFact *fact,
+                                 typename DataflowResult<PointerAnalysisFact>::Type *resultContainer,
+                                 DataflowVisitor<PointerAnalysisFact> *visitor) {
         auto functionName = callInst->getCalledOperand()->getName();
         if (functionName.startswith("llvm.dbg")) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
@@ -923,22 +965,70 @@ public:
             }
         } else { // Handle non-intrinsic functions
             // Add to CallGraph
-            auto *calledFunction = callInst->getCalledOperand();
-            if (auto *function = dyn_cast<Function>(calledFunction)) {
+            auto *calledOperand = callInst->getCalledOperand();
+            std::set<Function *> calledFunctionSet;
+            if (auto *function = dyn_cast<Function>(calledOperand)) {
                 fact->addCallEdge(callInst, function);
+                calledFunctionSet.insert(function);
             } else {
-                auto &PTS = fact->getPointToSet(calledFunction);
+                auto &PTS = fact->getPointToSet(calledOperand);
                 for (auto *maybeFunction: PTS) {
                     if (auto *function = dyn_cast<Function>(maybeFunction)) {
                         fact->addCallEdge(callInst, function);
+                        calledFunctionSet.insert(function);
                     }
                 }
             }
-            // TODO
+            // TODO: Inter-Procedure Call Handle
+            if (!functionName.startswith("malloc")) {
+#ifndef INTRA_PROCEDURE_ANALYSIS
+                unsigned int argNum = callInst->getNumArgOperands();
+                for (auto *calledFunction: calledFunctionSet) {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                    fprintf(stderr,
+                            "\t\t\t[-] Inter-Procedure start to analyze: %s(%p).\n",
+                            calledFunction->getName().data(), calledFunction);
+#endif
+                    // Handle argument-parameter transferring
+                    for (int i = 0; i < argNum; i++) {
+                        auto *curArg = callInst->getArgOperand(i);
+                        auto *curPara = calledFunction->getArg(i);
+                        transferFactNonClearAssign(fact, curPara, curArg);
+                    }
+                }
+                for (auto *calledFunction: calledFunctionSet) {
+                    // Analyze function
+                    analyzeForward(calledFunction, visitor, resultContainer, *fact, false);
+                }
+                for (auto *calledFunction: calledFunctionSet) {
+                    // Handle return value transferring
+                    BasicBlock *calledFuncRetBasicBlock;
+                    ReturnInst *calledFuncRetInst = [=](BasicBlock **calledFuncRetBasicBlock) {
+                        for (auto &basicBlock: *calledFunction) {
+                            for (auto &inst: basicBlock) {
+                                if (auto *retInst = dyn_cast<ReturnInst>(&inst)) {
+                                    *calledFuncRetBasicBlock = &basicBlock;
+                                    return retInst;
+                                }
+                            }
+                        }
+                        return static_cast<ReturnInst *>(nullptr);
+                    }(&calledFuncRetBasicBlock);
+                    fact->unionFact((*resultContainer)[calledFuncRetBasicBlock].output);
+                    transferFactNonClearAssign(fact, callInst, calledFuncRetInst->getReturnValue());
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                    fprintf(stderr,
+                            "\t\t\t[-] Inter-Procedure end analyzing: %s(%p).\n",
+                            calledFunction->getName().data(), calledFunction);
+#endif
+                }
+#endif
+            }
         }
     }
 
-    void transferInst(Instruction *inst, PointerAnalysisFact *fact) override {
+    void transferInst(Instruction *inst, PointerAnalysisFact *fact,
+                      InterAnalysisInfo<PointerAnalysisFact> &interAnalysisInfo) override {
         if (auto *allocaInst = dyn_cast<AllocaInst>(inst)) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
             fprintf(stderr, "\t\t[*] Handle %s instruction %p:", "AllocaInst", allocaInst);
@@ -950,7 +1040,7 @@ public:
             fprintf(stderr, "\t\t[*] Handle %s instruction %p:", "StoreInst", storeInst);
             inst->dump();
 #endif
-            transferInstStore(storeInst, fact);
+            transferInstStore(storeInst, fact, interAnalysisInfo.isEntryPoint);
         } else if (auto *loadInst = dyn_cast<LoadInst>(inst)) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
             fprintf(stderr, "\t\t[*] Handle %s instruction %p:", "LoadInst", loadInst);
@@ -974,7 +1064,7 @@ public:
             fprintf(stderr, "\t\t[*] Handle %s instruction %p:", "CallInst", callBase);
             inst->dump();
 #endif
-            transferInstCall(callBase, fact);
+            transferInstCall(callBase, fact, interAnalysisInfo.resultContainer, interAnalysisInfo.visitor);
         }
 #ifdef ASSIGNMENT_DEBUG_DUMP
         printDataflowFact<PointerAnalysisFact>(errs(), *fact);
@@ -1005,7 +1095,7 @@ public:
 
     static void analyzeFunction(Function &F, PointerAnalysisVisitor *visitor,
                                 DataflowResult<PointerAnalysisFact>::Type *result,
-                                const PointerAnalysisFact& initVal) {
+                                const PointerAnalysisFact &initVal, bool isEntrypoint) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
         labelAnonymousInstruction(F);
         fprintf(stderr, "[+] Analyzing Function %s %p, IR:\n", F.getName().data(), &F);
@@ -1013,7 +1103,7 @@ public:
         F.dump();
         stderrNormalBackground();
 #endif
-        analyzeForward(&F, visitor, result, initVal);
+        analyzeForward(&F, visitor, result, initVal, isEntrypoint);
 #ifdef ASSIGNMENT_DEBUG_DUMP
         printDataflowResult<PointerAnalysisFact>(errs(), *result);
 #endif
@@ -1024,7 +1114,7 @@ public:
         DataflowResult<PointerAnalysisFact>::Type result;
         PointerAnalysisFact initVal;
 
-        analyzeFunction(F, &visitor, &result, initVal);
+        analyzeFunction(F, &visitor, &result, initVal, true);
         return false;
     }
 };

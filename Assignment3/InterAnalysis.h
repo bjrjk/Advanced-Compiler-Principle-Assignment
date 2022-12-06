@@ -13,18 +13,39 @@ public:
 
     void runIntraProcedureAnalysis(Module &M) {
         PointerAnalysisVisitor visitor;
-        DataflowResult<PointerAnalysisFact>::Type result;
         PointerAnalysisFact initVal;
 
         for (auto &func: M) {
-            PointerAnalysis::analyzeFunction(func, &visitor, &dataflowResultContainer[&func], initVal);
+            PointerAnalysis::analyzeFunction(func, &visitor, &dataflowResultContainer[&func], initVal, true);
         }
     }
 
-    void collectCallSiteResult(Module &M) {
+    void collectIntraCallSiteResult(Module &M) {
         for (auto &func: M) {
             for (auto &basicBlock: func) {
                 for (auto &callEdge: dataflowResultContainer[&func][&basicBlock].output.getCallGraph()) {
+                    auto &callBase = callEdge.first;
+                    auto &calledFunctionSet = callEdge.second;
+                    for (auto *calledFunction: calledFunctionSet) {
+                        callSiteContainer[callBase->getDebugLoc().getLine()].insert(calledFunction->getName());
+                    }
+                }
+            }
+        }
+    }
+
+    void runInterProcedureAnalysis(Function &entrypoint) {
+        PointerAnalysisVisitor visitor;
+        DataflowResult<PointerAnalysisFact>::Type result;
+        PointerAnalysisFact initVal;
+
+        PointerAnalysis::analyzeFunction(entrypoint, &visitor, &dataflowResultContainer[&entrypoint], initVal, true);
+    }
+
+    void collectInterCallSiteResult(Module &M, Function &entrypoint) {
+        for (auto &func: M) {
+            for (auto &basicBlock: func) {
+                for (auto &callEdge: dataflowResultContainer[&entrypoint][&basicBlock].output.getCallGraph()) {
                     auto &callBase = callEdge.first;
                     auto &calledFunctionSet = callEdge.second;
                     for (auto *calledFunction: calledFunctionSet) {
@@ -52,11 +73,14 @@ public:
     bool runOnModule(Module &M) override {
 #ifdef INTRA_PROCEDURE_ANALYSIS
         runIntraProcedureAnalysis(M);
-        collectCallSiteResult(M);
-        printCallSiteResult();
+        collectIntraCallSiteResult(M);
 #else //INTER_PROCEDURE_ANALYSIS
-
+        for (auto &func: M) {
+            runInterProcedureAnalysis(func);
+            collectInterCallSiteResult(M, func);
+        }
 #endif
+        printCallSiteResult();
         return false;
     }
 };
