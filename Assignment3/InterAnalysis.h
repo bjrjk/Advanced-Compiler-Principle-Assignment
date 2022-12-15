@@ -23,13 +23,8 @@ public:
     void collectIntraCallSiteResult(Module &M) {
         for (auto &func: M) {
             for (auto &basicBlock: func) {
-                for (auto &callEdge: dataflowResultContainer[&func][&basicBlock].output.getCallGraph()) {
-                    auto &callBase = callEdge.first;
-                    auto &calledFunctionSet = callEdge.second;
-                    for (auto *calledFunction: calledFunctionSet) {
-                        callSiteContainer[callBase->getDebugLoc().getLine()].insert(calledFunction->getName());
-                    }
-                }
+                auto &callGraph = dataflowResultContainer[&func][&basicBlock].output.getCallGraph();
+                doCallSiteCollection(callGraph);
             }
         }
     }
@@ -45,11 +40,25 @@ public:
     void collectInterCallSiteResult(Module &M, Function &entrypoint) {
         for (auto &func: M) {
             for (auto &basicBlock: func) {
-                for (auto &callEdge: dataflowResultContainer[&entrypoint][&basicBlock].output.getCallGraph()) {
-                    auto &callBase = callEdge.first;
-                    auto &calledFunctionSet = callEdge.second;
-                    for (auto *calledFunction: calledFunctionSet) {
-                        callSiteContainer[callBase->getDebugLoc().getLine()].insert(calledFunction->getName());
+                auto &callGraph = dataflowResultContainer[&entrypoint][&basicBlock].output.getCallGraph();
+                doCallSiteCollection(callGraph);
+            }
+        }
+    }
+
+    void doCallSiteCollection(const std::map<Value *, std::set<Value *>> &callGraph) {
+        for (auto &callEdge: callGraph) {
+            auto &callBase = callEdge.first;
+            auto &calledFunctionSet = callEdge.second;
+            if (auto *realCallBase = dyn_cast<CallBase>(callBase)) { // Handle Source Node of Type CallBase
+                for (auto *calledFunction: calledFunctionSet) {
+                    if (auto *realCalledFunction = dyn_cast<Function>(calledFunction)) { // Handle CallBase -> Function
+                        callSiteContainer[realCallBase->getDebugLoc().getLine()].insert(realCalledFunction->getName());
+                    } else if (callGraph.count(calledFunction)) { // Handle CallBase -> FunctionPtr
+                        for (auto *realCalledFunctionUncasted: callGraph.find(calledFunction)->second) { // Traverse FunctionPtr
+                            auto *realCalledFunction = cast<Function>(realCalledFunctionUncasted); // Function
+                            callSiteContainer[realCallBase->getDebugLoc().getLine()].insert(realCalledFunction->getName());
+                        }
                     }
                 }
             }

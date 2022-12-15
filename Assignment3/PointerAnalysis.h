@@ -47,7 +47,7 @@ private:
     std::map<Pointer_t *, Pointer_t *> structToFieldMapper, fieldToStructMapper;
     std::map<Pointer_t *, Pointer_t *> mockPointerToPointeeMapper, mockPointeeToPointerMapper;
     std::set<Pointer_t *> isMockArrayContainer;
-    std::map<CallBase *, std::set<Function *>> callGraphContainer;
+    std::map<Value *, std::set<Value *>> callGraphContainer;
 public:
     PointerAnalysisFact() = default;
 
@@ -331,11 +331,17 @@ public:
         return isMockArrayContainer.insert(arrayPtr).second;
     }
 
-    void addCallEdge(CallBase *callBase, Function *function) {
+    /* CallEdgeType:
+     * CallBase -> Function, FunctionPtr
+     * FunctionPtr -> Function
+     */
+    void addCallEdge(Value *callBase, Value *function) {
+        assert(isa<CallBase>(callBase) ||
+               !isa<CallBase>(callBase) && isa<Function>(function));
         callGraphContainer[callBase].insert(function);
     }
 
-    const std::map<CallBase *, std::set<Function *>> &getCallGraph() const {
+    const std::map<Value *, std::set<Value *>> &getCallGraph() const {
         return callGraphContainer;
     }
 };
@@ -681,6 +687,18 @@ public:
         }
     }
 
+    // Find storage position of a called operand (function pointer).
+    static Value *getCalledOperandStorage(PointerAnalysisFact *fact, Value *calledOperand) {
+        auto *upstreamLoadInst = cast<LoadInst>(calledOperand);
+        auto *storagePointer = upstreamLoadInst->getPointerOperand();
+        auto &PTS = fact->getPointToSet(storagePointer);
+        if (PTS.size() == 1) {
+            return *PTS.begin();
+        } else {
+            return calledOperand;
+        }
+    }
+
     static void transferInstAlloca(AllocaInst *allocaInst, PointerAnalysisFact *fact) {
         // Heap Abstraction: Allocation Site
         if (allocaInst->getAllocatedType()->isPointerTy()) {
@@ -746,7 +764,8 @@ public:
             fprintf(stderr, "\t\t\t[-] Inter-Procedure Analysis.\n");
 #endif
 #endif
-            if (isIntraProcedure || isEntrypoint) { // Intra-Procedure Analysis or Entrypoint of Inter-Procedure Analysis
+            if (isIntraProcedure ||
+                isEntrypoint) { // Intra-Procedure Analysis or Entrypoint of Inter-Procedure Analysis
                 fact->addObject(argRHS);
                 if (isa<AllocaInst>(LHS)) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
@@ -994,18 +1013,19 @@ public:
             auto *calledOperand = callInst->getCalledOperand();
             std::set<Function *> calledFunctionSet;
             if (auto *function = dyn_cast<Function>(calledOperand)) {
-                fact->addCallEdge(callInst, function);
+                fact->addCallEdge(callInst, function); // CallBase -> Function
                 calledFunctionSet.insert(function);
             } else {
+                auto *calledOperandStorage = getCalledOperandStorage(fact, calledOperand);
+                fact->addCallEdge(callInst, calledOperandStorage); // CallBase -> FunctionPtr
                 auto &PTS = fact->getPointToSet(calledOperand);
                 for (auto *maybeFunction: PTS) {
                     if (auto *function = dyn_cast<Function>(maybeFunction)) {
-                        fact->addCallEdge(callInst, function);
+                        fact->addCallEdge(calledOperandStorage, function); // FunctionPtr -> Function
                         calledFunctionSet.insert(function);
                     }
                 }
             }
-            // TODO: Inter-Procedure Call Handle
             if (!functionName.startswith("malloc")) {
 #ifndef INTRA_PROCEDURE_ANALYSIS
                 unsigned int argNum = callInst->getNumArgOperands();
