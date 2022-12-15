@@ -1,0 +1,9 @@
+27 : minus
+38 : foo
+70 : make_simple_alias
+75 : make_alias
+81 : clever
+82 : minus
+83 : minus, plus
+84 : swap_w
+85 : minus
