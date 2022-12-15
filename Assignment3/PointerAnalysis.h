@@ -242,6 +242,15 @@ public:
         return isMockArrayContainer.count(maybeArrayPtr);
     }
 
+    bool isAllPointer2Struct(const std::set<Pointer_t *> &maybePtr2StructSet) const {
+        bool flag = true;
+        for (auto *maybePtr2Struct: maybePtr2StructSet) {
+            auto *maybeStructSet = getPointToSet(maybePtr2Struct);
+            flag &= isAllStruct(*maybeStructSet);
+        }
+        return flag;
+    }
+
     bool isAllStruct(const std::set<Pointer_t *> &maybeStructPtrSet) const {
         bool flag = true;
         for (auto *maybeStructPtr: maybeStructPtrSet) {
@@ -555,6 +564,19 @@ public:
                 }
                 break;
             }
+        }
+    }
+
+    static inline void transferFactLoadStorePointer2Struct(PointerAnalysisFact *fact,
+                                                           Pointer_t *LHS,
+                                                           Pointer_t *RHS) {
+        // **LHS._ = *RHS (memcpy) (LHS is pointer to struct, *LHS is struct object)
+        assertIsPointer(LHS);
+        assertIsPointer(RHS);
+
+        auto &LHS_PTS = fact->getPointToSet(LHS);
+        for (auto *structPtr: LHS_PTS) {
+            transferFactLoadStoreStruct(fact, structPtr, RHS);
         }
     }
 
@@ -976,6 +998,13 @@ public:
                         LHS->getName().data(), LHS, RHS->getName().data(), RHS);
 #endif
                 transferFactLoadStoreField(fact, LHS, RHS);
+            } else if (fact->isAllPointer2Struct(LHS_PTS)) {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                fprintf(stderr,
+                        "\t\t\t[-] Transfer Fact of llvm.memcpy(LoadStorePointer2Struct) Operation: %s(%p) <- %s(%p).\n",
+                        LHS->getName().data(), LHS, RHS->getName().data(), RHS);
+#endif
+                transferFactLoadStorePointer2Struct(fact, LHS, RHS);
             } else {
                 assert(false);
             }
