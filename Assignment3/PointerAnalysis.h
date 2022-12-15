@@ -108,6 +108,10 @@ public:
         return pointToSetContainer[pointer].erase(object);
     }
 
+    bool removePointToSelf(Pointer_t *pointer) {
+        return removePointTo(pointer, pointer);
+    }
+
     bool unionPointToSet(Pointer_t *pointer, const std::set<Object_t *> &externalObjectSet) {
         addPointer(pointer);
         addObjectSet(externalObjectSet);
@@ -263,6 +267,14 @@ public:
         bool flag = true;
         for (auto *maybeFieldPtr: maybeFieldPtrSet) {
             flag &= isField(maybeFieldPtr);
+        }
+        return flag;
+    }
+
+    bool isAllStructFieldHybrid(const std::set<Pointer_t *> &maybeStructFieldPtrSet) const {
+        bool flag = true;
+        for (auto *maybeStructFieldPtr: maybeStructFieldPtrSet) {
+            flag &= isStruct(maybeStructFieldPtr) | isField(maybeStructFieldPtr);
         }
         return flag;
     }
@@ -466,6 +478,7 @@ public:
             default: {
                 auto RHS_PTS = fact->getPointToSet(RHS);
                 for (auto *pointer: LHS_PTS) {
+                    if (!RHS_PTS.empty()) fact->removePointToSelf(pointer);
                     fact->unionPointToSet(pointer, RHS_PTS);
                 }
                 break;
@@ -629,6 +642,23 @@ public:
         auto toUnionSet = fact->getAllStructField(fact->getPointToSet(fact->getPointToSet(RHS)));
         fact->clearPointToSet(LHS);
         fact->unionPointToSet(LHS, toUnionSet);
+    }
+
+    static inline void transferFactStructFieldHybrid(PointerAnalysisFact *fact,
+                                                     Pointer_t *LHS,
+                                                     Pointer_t *RHS) {
+        auto RHS_PTS = fact->getPointToSet(RHS);
+        fact->clearPointToSet(LHS);
+        for (auto *RHSPointee: RHS_PTS) {
+            if (fact->isStruct(RHSPointee)) {
+                auto structField = fact->getStructField(RHSPointee);
+                fact->addPointTo(LHS, structField);
+            } else if (fact->isField(RHSPointee)) {
+                fact->addPointTo(LHS, RHSPointee);
+            } else {
+                assert(false);
+            }
+        }
     }
 
     static inline void transferFactArrayAssign(PointerAnalysisFact *fact,
@@ -896,10 +926,12 @@ public:
                 auto &RHS_PTS = fact->getPointToSet(RHS);
                 bool allStruct = fact->isAllStruct(RHS_PTS);
                 bool allField = fact->isAllField(RHS_PTS);
+                bool allStructFieldHybrid = fact->isAllStructFieldHybrid(RHS_PTS);
                 bool allNonStructRelated = fact->isAllNonStructRelated(RHS_PTS);
-                assert(allStruct && !allField && !allNonStructRelated ||
-                       !allStruct && allField && !allNonStructRelated ||
-                       !allStruct && !allField && allNonStructRelated);
+                assert(allStruct && !allField && allStructFieldHybrid && !allNonStructRelated ||
+                       !allStruct && allField && allStructFieldHybrid && !allNonStructRelated ||
+                       !allStruct && !allField && allStructFieldHybrid && !allNonStructRelated ||
+                       !allStruct && !allField && !allStructFieldHybrid && allNonStructRelated);
                 if (allStruct) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
                     fprintf(stderr,
@@ -914,6 +946,13 @@ public:
                             LHS->getName().data(), LHS, RHS->getName().data(), RHS);
 #endif
                     transferFactAssign(fact, LHS, RHS);
+                } else if(allStructFieldHybrid) {
+#ifdef ASSIGNMENT_DEBUG_DUMP
+                    fprintf(stderr,
+                            "\t\t\t[-] Transfer Fact of GetElementPtr(Struct TempReg, StructFieldHybrid) Operation: %s(%p) <- %s(%p).\n",
+                            LHS->getName().data(), LHS, RHS->getName().data(), RHS);
+#endif
+                    transferFactStructFieldHybrid(fact, LHS, RHS);
                 } else if (allNonStructRelated) {
 #ifdef ASSIGNMENT_DEBUG_DUMP
                     fprintf(stderr,
@@ -1180,6 +1219,11 @@ public:
                     inst.setName(buf);
                 }
             }
+        }
+
+        for (auto &argument: function.args()) {
+            sprintf(buf, "arg:%s_%s", function.getName().data(), argument.getName().data());
+            argument.setName(buf);
         }
     }
 
