@@ -1,4 +1,4 @@
-output format：
+output format:
 
 ${line} : ${func_name1}, ${func_name2}
 
